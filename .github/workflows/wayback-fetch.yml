@@ -1,0 +1,87 @@
+name: wayback-fetch
+
+# 在 GitHub 的服务器上抓 archive.org（沙箱/本机连不上时用这个）
+# 触发方式：网页 Actions 里点 Run workflow，或用 gh_trigger.sh
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: "要抓的域名，如 example.com"
+        required: true
+      limit:
+        description: "最多抓多少个 URL（留空 = 全部）"
+        required: false
+        default: ""
+      workers:
+        description: "并发线程数（默认 4）"
+        required: false
+        default: "4"
+      delay:
+        description: "请求间隔秒（默认 0.5）"
+        required: false
+        default: "0.5"
+      from_year:
+        description: "起始年份，如 2007（留空 = 不限）"
+        required: false
+        default: ""
+      to_year:
+        description: "结束年份，如 2019（留空 = 不限）"
+        required: false
+        default: ""
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: 取仓库代码
+        uses: actions/checkout@v4
+
+      - name: 装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 装依赖
+        run: pip install requests
+
+      - name: 抓取
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          LIMIT: ${{ inputs.limit }}
+          WORKERS: ${{ inputs.workers }}
+          DELAY: ${{ inputs.delay }}
+          FROM_YEAR: ${{ inputs.from_year }}
+          TO_YEAR: ${{ inputs.to_year }}
+        run: |
+          ARGS=()
+          [ -n "$LIMIT" ] && ARGS+=(--limit "$LIMIT")
+          [ -n "$FROM_YEAR" ] && ARGS+=(--from "$FROM_YEAR")
+          [ -n "$TO_YEAR" ] && ARGS+=(--to "$TO_YEAR")
+          echo "抓取 $DOMAIN  参数: ${ARGS[*]}"
+          python wb_crawl.py fetch "$DOMAIN" "${ARGS[@]}" \
+            --workers "${WORKERS:-4}" --delay "${DELAY:-0.5}"
+
+      - name: 打包（不压缩图片，store 模式）
+        if: always()
+        run: |
+          if [ -d site ]; then
+            cd site && zip -r -0 -q ../wayback_site.zip .
+            cd .. && ls -lh wayback_site.zip
+          else
+            echo "没有产出 site 目录"
+          fi
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayback-site
+          path: |
+            wayback_site.zip
+            site/_report.json
+            site/manifest.json
+          retention-days: 30
+          if-no-files-found: warn
