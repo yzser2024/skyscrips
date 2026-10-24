@@ -1,0 +1,153 @@
+name: fetch-skyscrips
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Prepare folders
+        run: mkdir -p out/files
+
+      - name: Pull every archived page from Wayback
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python3 - <<'EOF'
+          import json, os, time, hashlib, urllib.request, urllib.parse, sys
+
+          UA = {"User-Agent": "Mozilla/5.0 (compatible; archive-research/1.0)"}
+          DOMAIN = "skyscrips.blog.fc2.com"
+          OUT = "out/files"
+
+          CDX = ("http://web.archive.org/cdx/search/cdx?"
+                 "url=" + DOMAIN +
+                 "&matchType=domain&output=json"
+                 "&fl=timestamp,original,statuscode,mimetype"
+                 "&collapse=urlkey&limit=20000")
+
+          def fetch(url, timeout=90, tries=3):
+              for i in range(tries):
+                  try:
+                      req = urllib.request.Request(url, headers=UA)
+                      with urllib.request.urlopen(req, timeout=timeout) as r:
+                          return r.read()
+                  except Exception as e:
+                      if i == tries - 1:
+                          print("  FAIL", url[:100], str(e)[:80], flush=True)
+                          return None
+                      time.sleep(2 + i * 2)
+
+          print("== querying CDX index ==", flush=True)
+          raw = fetch(CDX)
+          if not raw:
+              sys.exit("CDX request failed")
+
+          data = json.loads(raw)
+          if not data:
+              sys.exit("CDX returned no rows")
+
+          header, rows = data[0], data[1:]
+          print("CDX columns:", header, flush=True)
+          print("total rows:", len(rows), flush=True)
+
+          want_mime = ("text/html", "image/jpeg", "image/png", "image/gif",
+                       "text/css", "application/javascript", "image/webp")
+
+          html_rows, res_rows = [], []
+          for row in rows:
+              ts, orig, code, mime = row[0], row[1], row[2], row[3]
+              if code != "200":
+                  continue
+              if mime.startswith("text/html"):
+                  html_rows.append((ts, orig))
+              elif mime in want_mime:
+                  res_rows.append((ts, orig))
+
+          print("HTML pages:", len(html_rows), " assets:", len(res_rows), flush=True)
+
+          def safe_name(ts, orig):
+              p = urllib.parse.urlparse(orig)
+              path = p.path.strip("/")
+              if not path:
+                  path = "index.html"
+              if p.query:
+                  path += "_" + hashlib.md5(p.query.encode()).hexdigest()[:8]
+              path = path.replace("/", "_")
+              for ch in '\\:*?"<>|':
+                  path = path.replace(ch, "_")
+              if len(path) > 150:
+                  path = path[:140] + "_" + hashlib.md5(path.encode()).hexdigest()[:8]
+              return ts + "_" + path
+
+          def grab(items, label):
+              ok = 0
+              for n, (ts, orig) in enumerate(items, 1):
+                  name = safe_name(ts, orig)
+                  fp = os.path.join(OUT, name)
+                  if os.path.exists(fp) and os.path.getsize(fp) > 0:
+                      ok += 1
+                      continue
+                  url = "https://web.archive.org/web/" + ts + "id_/" + orig
+                  blob = fetch(url)
+                  if blob:
+                      with open(fp, "wb") as f:
+                          f.write(blob)
+                      ok += 1
+                  if n % 10 == 0 or n == len(items):
+                      print(f"  {label} {n}/{len(items)}  ok={ok}", flush=True)
+                  time.sleep(0.25)
+              return ok
+
+          print("== downloading HTML ==", flush=True)
+          a = grab(html_rows, "html")
+          print("== downloading assets ==", flush=True)
+          b = grab(res_rows, "asset")
+
+          total = len(os.listdir(OUT))
+          print(f"== done: html={a} assets={b} files_on_disk={total}", flush=True)
+
+          with open("out/summary.txt", "w", encoding="utf-8") as f:
+              f.write(f"domain={DOMAIN}\ncdx_rows={len(rows)}\n")
+              f.write(f"html={len(html_rows)}\nassets={len(res_rows)}\n")
+              f.write(f"html_ok={a}\nassets_ok={b}\n")
+          EOF
+
+      - name: Show what we got
+        run: |
+          echo "file count: $(ls -1 out/files | wc -l)"
+          du -sh out/files
+          cat out/summary.txt || true
+
+      - name: Zip it
+        run: |
+          cd out
+          zip -r -q ../skyscrips_wayback.zip files summary.txt
+          cd ..
+          ls -lh skyscrips_wayback.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skyscrips-wayback
+          path: skyscrips_wayback.zip
+          retention-days: 14
+
+      - name: Publish as release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="archive-${{ github.run_number }}"
+          gh release create "$TAG" skyscrips_wayback.zip \
+            --title "skyscrips archive ${{ github.run_number }}" \
+            --notes "auto-collected from Wayback Machine" \
+            --latest
+          echo "RELEASE_URL=https://github.com/${{ github.repository }}/releases/download/$TAG/skyscrips_wayback.zip"
