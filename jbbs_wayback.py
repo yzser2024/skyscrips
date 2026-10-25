@@ -41,14 +41,16 @@ def cdx(url, match="prefix", limit=3000):
         return []
 
 
-rows = cdx(TARGET + "*")
-print("原始快照条目：%d" % len(rows), flush=True)
+rows = cdx("yf04.com", match="domain", limit=6000)
+print("域名下全部快照：%d" % len(rows), flush=True)
+for ts, orig, code, length in rows[:15]:
+    print("   样本 %s %s" % (ts, orig[:100]), flush=True)
 
 # 只保留 oneyunn 板（和少量无 id 的入口页）
 picked = []
 for ts, orig, code, length in rows:
     low = orig.lower()
-    if "id=oneyunn" in low or low.rstrip("/").endswith("jbbs.cgi"):
+    if "jbbs" in low and ("oneyunn" in low or "id=" in low or low.rstrip("/").endswith("jbbs.cgi")):
         picked.append((ts, orig))
 print("筛选后：%d" % len(picked), flush=True)
 
