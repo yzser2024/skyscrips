@@ -1,0 +1,30 @@
+name: tumblr-wayback
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests
+
+      - name: 抓 Wayback 快照
+        run: python tumblr_wayback.py 2>&1 | tee out_log.txt || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tumblr-wayback
+          path: |
+            out/
+            out_log.txt
+          retention-days: 14
