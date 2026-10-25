@@ -1,0 +1,43 @@
+name: tumblr-fetch
+
+# 抓 ucaliy.tumblr.com 的 RSS + 首页 + 分页 + 旧 API，打包成 artifact
+# 用法：仓库 Actions → tumblr-fetch → Run workflow → 跑完下载 tumblr-dump
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 抓取
+        run: |
+          mkdir -p out
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+
+          echo "== RSS =="
+          curl -sSL --compressed -A "$UA" "https://ucaliy.tumblr.com/rss" -o out/rss.xml || true
+          echo "rss: $(wc -c < out/rss.xml) bytes"
+
+          echo "== 首页与分页 =="
+          for p in "" "page/2" "page/3" "page/4" "page/5"; do
+            name=$(echo "${p:-index}" | tr '/' '_')
+            curl -sSL --compressed -A "$UA" "https://ucaliy.tumblr.com/$p" -o "out/${name}.html" || true
+            echo "${name}: $(wc -c < "out/${name}.html") bytes"
+          done
+
+          echo "== 旧 API（可能已关，失败无妨）=="
+          curl -sSL --compressed -A "$UA" "https://ucaliy.tumblr.com/api/read/json?num=50" -o out/api.json || true
+          echo "api: $(wc -c < out/api.json) bytes"
+
+          ls -lh out
+
+      - name: 上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: tumblr-dump
+          path: out/
+          retention-days: 7
+          if-no-files-found: warn
