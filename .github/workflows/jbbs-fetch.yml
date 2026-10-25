@@ -1,0 +1,25 @@
+name: jbbs-fetch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: 抓 yf04.com 留言板快照
+        run: python jbbs_wayback.py 2>&1 | tee jbbs_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jbbs-dump
+          path: |
+            out/
+            jbbs_log.txt
+          retention-days: 14
