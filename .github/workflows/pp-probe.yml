@@ -1,0 +1,26 @@
+name: pp-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - run: python pp_probe.py 2>&1 | tee probe_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pp-probe
+          path: |
+            audio_hits.json
+            dl_*
+            probe_log.txt
+          retention-days: 14
+          if-no-files-found: warn
