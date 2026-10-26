@@ -27,7 +27,7 @@ hits = []
 for host in TARGETS:
     try:
         r = S.get(CDX, params={
-            "url": host + "/*", "matchType": "prefix", "output": "json",
+            "url": host + "/*", "output": "json",
             "fl": "timestamp,original,statuscode,mimetype,length",
             "filter": "statuscode:200", "collapse": "urlkey", "limit": "5000",
         }, timeout=240)
