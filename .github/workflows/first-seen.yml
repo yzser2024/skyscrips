@@ -1,0 +1,21 @@
+name: first-seen
+on:
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - run: python first_seen.py 2>&1 | tee first_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: first-seen
+          path: |
+            first_seen.json
+            first_log.txt
