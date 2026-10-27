@@ -116,15 +116,20 @@ def main():
                 open(dst + ".txt", "w", encoding="utf-8").write(to_txt(t))
                 pages[u] = {"enc": enc, "file": rel}
 
-                # 收集链接
-                for m in re.finditer(r'(?:href|src|data-src|background)\s*=\s*["\']([^"\']+)["\']', t, re.I):
-                    raw = m.group(1).strip()
+                # 收集链接（兼容不带引号的写法 href=./xxx.html）
+                for m in re.finditer(r'(?:href|src|data-src|background)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))', t, re.I):
+                    raw = (m.group(1) or m.group(2) or m.group(3) or "").strip()
                     if raw.startswith(("mailto:", "javascript:", "#", "tel:")):
                         continue
                     full = urllib.parse.urljoin(r.url, raw)
-                    if urllib.parse.urlsplit(full).netloc != HOST:
-                        continue
                     low = full.lower().split("?")[0]
+                    host2 = urllib.parse.urlsplit(full).netloc
+                    if host2 != HOST:
+                        # 外链媒体（可能指向 oneyunn79 / geocities 的 mid）也记下来
+                        if low.endswith(MEDIA):
+                            media.add(full)
+                            log.append({"url": u, "external_media": full})
+                        continue
                     if low.endswith(MEDIA):
                         media.add(full)
                     elif low.endswith((".html", ".htm", ".php", ".cgi", "/")) or "." not in low.rsplit("/", 1)[-1]:
@@ -143,9 +148,13 @@ def main():
             log.append({"url": u, "status": "media-fail"})
             continue
         dst = os.path.join(OUT, path_of(u))
+        host3 = urllib.parse.urlsplit(u).netloc
+        if host3 and host3 != HOST:
+            dst = os.path.join(OUT, "_ext", host3, path_of(u))
         os.makedirs(os.path.dirname(dst) or OUT, exist_ok=True)
         open(dst, "wb").write(r.content)
-        log.append({"url": u, "status": 200, "size": len(r.content), "file": path_of(u), "type": "media"})
+        log.append({"url": u, "status": 200, "size": len(r.content),
+                    "file": os.path.relpath(dst, OUT), "type": "media"})
 
     json.dump(log, open(os.path.join(OUT, "_log.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print("页面 %d，媒体 %d" % (len(pages), len(media)))
