@@ -1,0 +1,78 @@
+name: wr-deep
+
+# 抓 With R / ONE's 相关的旧站（沙箱直连日本 IP 与 archive.org 都不通，用 GitHub 服务器代抓）
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "只跑指定任务：mz / wr（留空=两个都跑）"
+        required: false
+        default: ""
+      limit:
+        description: "wr 任务：每个目标最多下载多少个快照（留空=不限）"
+        required: false
+        default: ""
+
+jobs:
+  mz:
+    if: ${{ inputs.only == '' || inputs.only == 'mz' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: 爬 mahoutukai（活站，直连）
+        run: python mz_crawl.py 2>&1 | tee mz_log.txt
+      - name: 打包
+        if: always()
+        run: |
+          if [ -d site/mahoutukai ]; then
+            cd site && zip -r -0 -q ../mahoutukai.zip mahoutukai
+            cd .. && ls -lh mahoutukai.zip
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mahoutukai
+          path: |
+            mahoutukai.zip
+            mz_log.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+  wr:
+    if: ${{ inputs.only == '' || inputs.only == 'wr' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: 抓 Wayback 旧站
+        env:
+          LIMIT: ${{ inputs.limit }}
+          WORKERS: "8"
+        run: python wr_deep.py 2>&1 | tee wr_log.txt
+      - name: 打包（不压缩，保留原始字节）
+        if: always()
+        run: |
+          if [ -d site ]; then
+            cd site && zip -r -0 -q ../wr_sites.zip . -x "mahoutukai/*"
+            cd .. && ls -lh wr_sites.zip
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wr-sites
+          path: |
+            wr_sites.zip
+            wr_log.txt
+            site/_report.json
+            site/_manifest.json
+          retention-days: 30
+          if-no-files-found: warn
