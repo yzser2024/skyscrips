@@ -1,0 +1,40 @@
+name: ones-ui7
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: curl 抓母站图与 jbbs 皮肤
+        run: |
+          set -u
+          mkdir -p out_ui/site out_ui/jbbsskin
+          get() {
+            url="$1"; out="$2"
+            [ -s "$out" ] && { echo "skip $out"; return; }
+            curl -sL --retry 1 --retry-delay 1 --max-time 9 -o "$out" "$url" 2>/dev/null
+            sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
+            if [ "$sz" -lt 200 ]; then rm -f "$out"; echo "miss $url"; else echo "ok $sz $url"; fi
+          }
+          for base in https://web.archive.org/web/2004im_ https://web.archive.org/web/2005im_ https://web.archive.org/web/2006im_; do
+            echo "## $base"
+            for f in title1.jpg 01.jpg bbs.jpg film.jpg ld.jpg ss04b.jpg 023.jpg i_po5.gif; do
+              get "$base/http://oneyunn79.client.jp/$f" "out_ui/site/oneyunn79.client.jp_$f"
+            done
+            for t in table/00.gif table/c01.gif table/c02.gif table/c03.gif table/c04.gif table/d02.gif table/d03.gif table/d05.gif line.gif banner/00.gif banner/write.gif banner/home.gif; do
+              n=$(echo $t | tr '/' '_')
+              get "$base/http://yf04.com/cgi-bin/jbbs/003/$t" "out_ui/jbbsskin/yf04.com_cgi-bin_jbbs_003_$n"
+            done
+          done
+          echo "--- files ---"
+          find out_ui -type f | wc -l
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ones-ui7
+          path: out_ui/
+          retention-days: 14
