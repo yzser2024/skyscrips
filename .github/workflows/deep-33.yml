@@ -1,0 +1,19 @@
+name: deep-33
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep33_amorsite.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep31
+          path: out_deep33
+          if-no-files-found: warn
