@@ -1,0 +1,31 @@
+name: ones-ui
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 抓母站与皮肤素材
+        run: python ones_ui_fetch.py 2>&1 | tee ui_log.txt || true
+      - name: 统计
+        run: |
+          echo "--- tree ---"
+          find out_ui -type f | head -100
+          echo "--- count ---"
+          find out_ui -type f | wc -l
+          du -sh out_ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ones-ui
+          path: |
+            out_ui/
+            ui_log.txt
+          retention-days: 14
