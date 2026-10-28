@@ -1,0 +1,24 @@
+name: deep-13
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 六家外部存档方普查
+        run: python deep13_archives.py 2>&1 | tee deep_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deep-13
+          path: |
+            out_deep13/
+            deep_log.txt
+          retention-days: 20
