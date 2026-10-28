@@ -55,6 +55,11 @@ def grab(ts, orig, dst):
     return 0
 
 
+def h(s):
+    import zlib
+    return "%05d" % (zlib.crc32(s.encode()) % 100000)
+
+
 def safe(s):
     return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in s)[:90]
 
@@ -83,27 +88,28 @@ with open(OUT + "/bbs_cdx.json", "w", encoding="utf-8") as f:
 
 # ---------- 2. 抓日记 ----------
 drows = cdx("diary1.fc2.com/cgi-sys/ed.cgi/oneyunn79")
-print("日记快照 %d 条" % len(drows), flush=True)
-seen = set()
+_old = [r for r in drows if r[0][:4] in ("2004", "2005", "2006", "2007", "2008", "2009")]
+_new = [r for r in drows if r[0][:4] not in ("2004", "2005", "2006", "2007", "2008", "2009")][:2]
+drows = _old + _new
+print("日记快照 %d 条（旧年 %d + 近年抽样 %d）" % (len(drows), len(_old), len(_new)), flush=True)
 man = []
 for ts, orig, code, mt, ln in drows:
-    key = orig
-    if key in seen:
-        continue
-    seen.add(key)
-    dst = "%s/diary/%s__%s.html" % (OUT, ts, safe(orig.split("oneyunn79", 1)[-1]) or "index")
+    dst = "%s/diary/%s__%s__%s.html" % (
+        OUT, ts, h(orig),
+        safe(orig.split("oneyunn79", 1)[-1]) or "index")
     n = grab(ts, orig, dst)
     print("  %s %-60s %d" % (ts, orig[:60], n), flush=True)
     man.append({"ts": ts, "url": orig, "bytes": n, "file": os.path.basename(dst)})
     time.sleep(1.2)
 
 # ---------- 3. 抓留言板 ----------
-seen = set()
+_seen = set()
 for tag, ts, orig, code, mt, ln in bbs_rows:
-    if orig in seen:
+    if (ts, orig) in _seen:
         continue
-    seen.add(orig)
-    dst = "%s/bbs/%s__%s__%s.html" % (OUT, tag, ts, safe(orig.split("/310/", 1)[-1]) or "index")
+    _seen.add((ts, orig))
+    dst = "%s/bbs/%s__%s__%s.html" % (
+        OUT, tag, ts, safe(orig.replace("http://", "").replace("/", "_")) or "index")
     n = grab(ts, orig, dst)
     print("  [%s] %s %-50s %d" % (tag, ts, orig[:50], n), flush=True)
     man.append({"ts": ts, "url": orig, "bytes": n, "file": "bbs/" + os.path.basename(dst), "tag": tag})
