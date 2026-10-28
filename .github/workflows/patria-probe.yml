@@ -1,0 +1,33 @@
+name: patria-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests
+
+      - name: 查询并下载
+        run: python probe_patria.py 2>&1 | tee probe_log.txt
+
+      - name: 打包
+        if: always()
+        run: |
+          zip -r -0 patria_probe.zip cdx_patria.json report.txt probe_log.txt files 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: patria-probe
+          path: patria_probe.zip
+          if-no-files-found: warn
