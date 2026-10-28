@@ -1,0 +1,48 @@
+name: ones-ui6
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+      - name: curl 补图（分三批，硬超时）
+        run: |
+          set -u
+          mkdir -p out_ui/fc2img out_ui/fc2user out_ui/site out_ui/jbbsskin
+          get() {
+            url="$1"; out="$2"
+            [ -s "$out" ] && { echo "skip $out"; return; }
+            curl -sL --retry 2 --retry-delay 2 --max-time 10 -o "$out" "$url" 2>/dev/null
+            sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
+            if [ "$sz" -lt 200 ]; then rm -f "$out"; echo "miss $url"; else echo "ok $sz $url"; fi
+          }
+          B=https://web.archive.org/web/2004im_
+          echo "== A 表情/天气/箭头"
+          for e in e1 e4; do get "$B/http://diary1.fc2.com/img/emotion/$e.gif" "out_ui/fc2img/diary1.fc2.com_img_emotion_$e.gif"; done
+          for w in w1 w2 w3 w6; do get "$B/http://diary1.fc2.com/img/weather/$w.gif" "out_ui/fc2img/diary1.fc2.com_img_weather_$w.gif"; done
+          for a in next_m1 next_m2 prev_m1 prev_m2 spacer; do get "$B/http://diary1.fc2.com/img/$a.gif" "out_ui/fc2img/diary1.fc2.com_img_$a.gif"; done
+          echo "== B 日记配图"
+          for d in 2004_8/26 2004_8/27 2004_8/29 2004_9/1 2004_9/2 2004_9/16 2004_9/20 2004_9/22 2004_9/23 2004_11/5; do
+            n=$(echo $d | tr '/' '_')
+            get "$B/http://diary1.fc2.com/user/oneyunn79/img/$d.jpg" "out_ui/fc2user/diary1.fc2.com_user_oneyunn79_img_$n.jpg"
+          done
+          echo "== C 母站图与 jbbs 皮肤"
+          for f in title1.jpg 01.jpg bbs.jpg film.jpg ld.jpg ss04b.jpg 023.jpg i_po5.gif; do
+            get "$B/http://oneyunn79.client.jp/$f" "out_ui/site/oneyunn79.client.jp_$f"
+          done
+          for t in table/00.gif table/c01.gif table/c02.gif table/c03.gif table/c04.gif table/d02.gif table/d03.gif table/d05.gif line.gif banner/00.gif banner/write.gif banner/home.gif; do
+            n=$(echo $t | tr '/' '_')
+            get "$B/http://yf04.com/cgi-bin/jbbs/003/$t" "out_ui/jbbsskin/yf04.com_cgi-bin_jbbs_003_$n"
+          done
+          echo "--- files ---"
+          find out_ui -type f | wc -l
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ones-ui6
+          path: out_ui/
+          retention-days: 14
