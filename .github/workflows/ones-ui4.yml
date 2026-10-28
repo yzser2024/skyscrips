@@ -1,0 +1,24 @@
+name: ones-ui4
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 快速补图
+        run: python ones_ui_fetch4.py 2>&1 | tee ui4_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ones-ui4
+          path: |
+            out_ui/
+            ui4_log.txt
+          retention-days: 14
