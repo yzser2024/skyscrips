@@ -1,0 +1,24 @@
+name: deep-23
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 受限确认与curl重试
+        run: python deep23_restricted.py 2>&1 | tee deep_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deep-23
+          path: |
+            out_deep23/
+            deep_log.txt
+          retention-days: 20
