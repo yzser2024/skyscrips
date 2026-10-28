@@ -1,0 +1,52 @@
+name: ones-ui5
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: curl 逐张取（硬超时）
+        run: |
+          set -u
+          mkdir -p out_ui/fc2img out_ui/fc2user out_ui/site out_ui/jbbsskin
+          get() {
+            url="$1"; out="$2"
+            code=$(curl -sL --max-time 12 -w '%{http_code}' -o "$out" "$url" 2>/dev/null || echo 000)
+            sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
+            echo "$code $sz $url"
+            if [ "$sz" -lt 200 ]; then rm -f "$out"; fi
+          }
+          B=https://web.archive.org/web/2004im_
+          for e in e1 e2 e3 e4 e5 e6; do
+            get "$B/http://diary1.fc2.com/img/emotion/$e.gif" "out_ui/fc2img/diary1.fc2.com_img_emotion_$e.gif"
+          done
+          for w in w1 w2 w3 w6; do
+            get "$B/http://diary1.fc2.com/img/weather/$w.gif" "out_ui/fc2img/diary1.fc2.com_img_weather_$w.gif"
+          done
+          for a in next_m1 next_m2 prev_m1 prev_m2 spacer; do
+            get "$B/http://diary1.fc2.com/img/$a.gif" "out_ui/fc2img/diary1.fc2.com_img_$a.gif"
+          done
+          get "$B/http://diary1.fc2.com/user/oneyunn79/img/bg.jpg" "out_ui/fc2user/diary1.fc2.com_user_oneyunn79_img_bg.jpg"
+          for d in 2004_8/3 2004_8/6 2004_9/5 2004_11/16; do
+            n=$(echo $d | tr '/' '_')
+            get "$B/http://diary1.fc2.com/user/oneyunn79/img/$d.jpg" "out_ui/fc2user/diary1.fc2.com_user_oneyunn79_img_$n.jpg"
+          done
+          for f in title1.jpg 01.jpg bbs.jpg film.jpg; do
+            get "$B/http://oneyunn79.client.jp/$f" "out_ui/site/oneyunn79.client.jp_$f"
+          done
+          for t in table/00.gif table/c01.gif table/c02.gif table/c03.gif table/c04.gif line.gif banner/00.gif; do
+            n=$(echo $t | tr '/' '_')
+            get "$B/http://yf04.com/cgi-bin/jbbs/003/$t" "out_ui/jbbsskin/yf04.com_cgi-bin_jbbs_003_$n"
+          done
+          echo "--- files ---"
+          find out_ui -type f | wc -l
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ones-ui5
+          path: out_ui/
+          retention-days: 14
