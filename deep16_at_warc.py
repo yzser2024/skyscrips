@@ -49,8 +49,8 @@ def get(url, timeout=90, retries=3):
 
 def adv(q, rows=100):
     u = ("https://archive.org/advancedsearch.php?q=" + urllib.parse.quote(q) +
-         "&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=item_size"
-         "&fl%5B%5D=publicdate&rows=%d&page=1&output=json" % rows)
+         "&fl[]=identifier&fl[]=title&fl[]=item_size"
+         "&fl[]=publicdate&rows=" + str(rows) + "&page=1&output=json")
     st, b = get(u)
     try:
         d = json.loads(b)
