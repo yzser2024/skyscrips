@@ -1,0 +1,19 @@
+name: deep-26
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: probe
+        run: python3 deep26_rocket.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep25
+          path: out_deep26
+          if-no-files-found: warn
