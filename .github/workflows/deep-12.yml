@@ -1,0 +1,24 @@
+name: deep-12
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 私人文候选页抓取
+        run: python deep12_otherpages.py 2>&1 | tee deep_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deep-12
+          path: |
+            out_deep12/
+            deep_log.txt
+          retention-days: 20
