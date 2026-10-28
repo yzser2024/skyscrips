@@ -1,0 +1,24 @@
+name: deep-15
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 友站链接页反查旧地址
+        run: python deep15_linkback.py 2>&1 | tee deep_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deep-15
+          path: |
+            out_deep15/
+            deep_log.txt
+          retention-days: 20
