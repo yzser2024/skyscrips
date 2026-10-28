@@ -1,0 +1,24 @@
+name: deep-22
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 索引格式与cookie会话
+        run: python deep22_idx.py 2>&1 | tee deep_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deep-22
+          path: |
+            out_deep22/
+            deep_log.txt
+          retention-days: 20
