@@ -1,0 +1,25 @@
+name: ones-fetch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: 抓 ONE's 日记与留言板
+        run: python ones_fetch.py 2>&1 | tee ones_fetch_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ones-fetch
+          path: |
+            out/
+            ones_fetch_log.txt
+          retention-days: 14
