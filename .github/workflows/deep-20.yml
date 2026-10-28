@@ -1,0 +1,24 @@
+name: deep-20
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: withr79别馆全站
+        run: python deep20_withr79.py 2>&1 | tee deep_log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deep-20
+          path: |
+            out_deep20/
+            deep_log.txt
+          retention-days: 20
