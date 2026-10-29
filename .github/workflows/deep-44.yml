@@ -1,0 +1,19 @@
+name: deep-44
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep44_cc.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep44
+          path: out_deep44
+          if-no-files-found: warn
