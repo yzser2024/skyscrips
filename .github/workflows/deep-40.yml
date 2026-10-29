@@ -1,0 +1,19 @@
+name: deep-40
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep40_social.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep40
+          path: out_deep40
+          if-no-files-found: warn
