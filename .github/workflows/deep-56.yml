@@ -1,0 +1,19 @@
+name: deep-56
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep56_name.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep56
+          path: out_deep56
+          if-no-files-found: warn
