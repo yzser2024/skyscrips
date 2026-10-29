@@ -46,17 +46,23 @@ def fetch(url, tries=6, timeout=50):
 
 
 def cdx(prefix, limit=1500):
-    u = ("http://web.archive.org/cdx/search/cdx?url=%s*&matchType=prefix&output=json"
-         "&fl=original,timestamp,statuscode,mimetype,length&filter=statuscode:200"
-         "&collapse=urlkey&limit=%d" % (prefix, limit))
+    p2 = prefix[:-1] if prefix.endswith("/") else prefix
+    u = ("http://web.archive.org/cdx/search/cdx?url=%s&matchType=prefix&output=json"
+         "&fl=original,timestamp,statuscode,mimetype,length"
+         "&collapse=urlkey&limit=%d" % (p2, limit))
     st, b = fetch(u, timeout=120)
     if st != 200 or not b:
         note("  CDX FAIL %s -> %s" % (prefix, st))
         return []
     try:
-        return json.loads(b.decode("utf-8", "replace"))[1:]
+        rows = json.loads(b.decode("utf-8", "replace"))[1:]
     except Exception:
         return []
+    out = []
+    for r in rows:
+        if len(r) > 2 and str(r[2]) == "200":
+            out.append(r)
+    return out
 
 
 def fix(u):
