@@ -1,0 +1,19 @@
+name: deep-49
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep49_onyrest.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep49
+          path: out_deep49
+          if-no-files-found: warn
