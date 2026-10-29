@@ -1,0 +1,19 @@
+name: deep-47
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep47_sccomments.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep47
+          path: out_deep47
+          if-no-files-found: warn
