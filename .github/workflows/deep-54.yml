@@ -1,0 +1,19 @@
+name: deep-54
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep54_lyrics3.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep54
+          path: out_deep54
+          if-no-files-found: warn
