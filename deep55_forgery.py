@@ -44,7 +44,6 @@ def fetch(url, tries=5, timeout=60):
 TARGETS = [
     ("forgery", "20181105032110"),
 ]
-]
 
 man = []
 for name, ts in TARGETS:
