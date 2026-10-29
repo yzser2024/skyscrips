@@ -1,0 +1,19 @@
+name: deep-57
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep57_about2014.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep57
+          path: out_deep57
+          if-no-files-found: warn
