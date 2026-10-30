@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: grab
-        run: python3 deep62_kabi.py
+        run: python3 .github/scripts/deep62_kabi.py
       - name: upload
         if: always()
         uses: actions/upload-artifact@v4
