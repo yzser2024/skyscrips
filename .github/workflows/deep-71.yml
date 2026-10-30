@@ -1,0 +1,19 @@
+name: deep-71
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 .github/scripts/deep71_hover2.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep70
+          path: out_deep71
+          if-no-files-found: warn
