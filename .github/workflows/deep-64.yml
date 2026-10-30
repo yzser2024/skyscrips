@@ -1,0 +1,19 @@
+name: deep-64
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 .github/scripts/deep64_ldcc2.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep64
+          path: out_deep64
+          if-no-files-found: warn
