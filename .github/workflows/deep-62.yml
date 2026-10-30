@@ -1,0 +1,19 @@
+name: deep-62
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 deep62_kabi.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep62
+          path: out_deep62
+          if-no-files-found: warn
