@@ -1,0 +1,19 @@
+name: deep-74
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: grab
+        run: python3 .github/scripts/deep74_yellow.py
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-deep74
+          path: out_deep74
+          if-no-files-found: warn
