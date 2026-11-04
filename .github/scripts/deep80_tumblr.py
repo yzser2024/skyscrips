@@ -39,5 +39,17 @@ for u in ["https://ucaliy.tumblr.com/post/126669799930",
     except Exception as e:
         info["post_error_" + u.split("/")[2]] = "%s: %s" % (type(e).__name__, e)
 
+# 封面图
+COVER = "https://64.media.tumblr.com/tumblr_nt2ry9NaVF1udjnj8o1_1439560450_cover.jpg"
+try:
+    req = urllib.request.Request(COVER, headers={"User-Agent": "Mozilla/5.0"})
+    r = urllib.request.urlopen(req, timeout=60)
+    cb = r.read()
+    info["cover"] = {"status": r.status, "bytes": len(cb), "md5": hashlib.md5(cb).hexdigest()}
+    open(os.path.join(OUT, "cover.jpg"), "wb").write(cb)
+    r.close()
+except Exception as e:
+    info["cover_error"] = "%s: %s" % (type(e).__name__, e)
+
 json.dump(info, open(os.path.join(OUT, "result.json"), "w"), ensure_ascii=False, indent=1)
 print(json.dumps(info, ensure_ascii=False, indent=1)[:3000])
