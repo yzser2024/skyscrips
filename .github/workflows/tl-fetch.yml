@@ -16,7 +16,7 @@ jobs:
           python-version: "3.11"
 
       - name: 抓取
-        run: python /home/runner/work/skyscrips/skyscrips/.github/scripts/tl_fetch2.py 2>&1 | tee /tmp/tl_log.txt
+        run: python /home/runner/work/skyscrips/skyscrips/.github/scripts/tl_fetch3.py 2>&1 | tee /tmp/tl_log.txt
 
       - name: 打包
         if: always()
