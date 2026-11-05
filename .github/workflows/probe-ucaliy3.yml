@@ -1,0 +1,33 @@
+name: probe-ucaliy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 抓取
+        run: python /home/runner/work/skyscrips/skyscrips/.github/scripts/probe_ucaliy3.py 2>&1 | tee /tmp/ua3_log.txt
+
+      - name: 打包
+        if: always()
+        run: |
+          cp /tmp/ua3_log.txt out_ua3/log_main.txt 2>/dev/null || true
+          zip -r -0 ua3_out.zip out_ua3 2>/dev/null || true
+          ls -la ua3_out.zip || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ua3-out
+          path: ua3_out.zip
+          if-no-files-found: warn
