@@ -1,0 +1,76 @@
+name: probe-jp16
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 yt-dlp 与 ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python -m pip install -U yt-dlp
+          yt-dlp --version
+
+      - name: 下载全部曲目
+        run: |
+          mkdir -p out_jp16/mp3
+          yt-dlp -f bestaudio \
+            --extract-audio --audio-format mp3 --audio-quality 0 \
+            --write-info-json --embed-metadata --no-overwrites \
+            --sleep-requests 1 --retries 5 --fragment-retries 5 \
+            -o "out_jp16/mp3/%(autonumber)03d_%(id)s_%(title).80s.%(ext)s" \
+            "https://soundcloud.com/tristeza0810/tracks" 2>&1 | tee out_jp16/log_jp16.txt || true
+          ls out_jp16/mp3 | wc -l
+
+      - name: 分卷
+        run: python pack_jp16.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp16-vol1
+          path: vol1.zip
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp16-vol2
+          path: vol2.zip
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp16-vol3
+          path: vol3.zip
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp16-vol4
+          path: vol4.zip
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp16-vol5
+          path: vol5.zip
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp16-vol6
+          path: vol6.zip
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp16-meta
+          path: out_jp16/log_jp16.txt
+          if-no-files-found: warn
