@@ -95,10 +95,16 @@ log("user:", user.get("id"), user.get("permalink"), user.get("username"),
     "tracks:", user.get("track_count"), "followers:", user.get("followers_count"))
 
 # ---------- 2. client_id ----------
+client_id = None
+for b in hyd:
+    if b.get("hydratable") == "apiClient":
+        client_id = (b.get("data") or {}).get("id")
+        if client_id:
+            log("client_id from hydration apiClient ->", client_id)
+
 js_urls = re.findall(r'<script[^>]+src="(https://a-v2\.sndcdn\.com/assets/[^"]+\.js)"', html)
 log("js assets", len(js_urls))
-client_id = None
-for u in js_urls[:8]:
+for u in ([] if client_id else js_urls[:8]):
     st2, js = get(u)
     if not js:
         continue
