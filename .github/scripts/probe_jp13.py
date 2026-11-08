@@ -160,9 +160,16 @@ while True:
     nxt = d.get("next_href")
     if not nxt or not coll:
         break
-    # 解析 next_href 里的 offset
+    if user.get("track_count") and len(tracks) >= user["track_count"]:
+        log("  reached track_count, stop")
+        break
+    # 解析 next_href 里的 offset（可能是 cursor 形式，解析失败即停止）
     q = urllib.parse.parse_qs(urllib.parse.urlparse(nxt).query)
-    offset = int(q.get("offset", ["0"])[0])
+    try:
+        offset = int(q.get("offset", ["0"])[0])
+    except ValueError:
+        log("  cursor-style next_href, stop")
+        break
     if page > 30:
         break
     time.sleep(0.6)
