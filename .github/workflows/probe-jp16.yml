@@ -30,7 +30,7 @@ jobs:
           ls out_jp16/mp3 | wc -l
 
       - name: 分卷
-        run: python pack_jp16.py
+        run: python .github/scripts/pack_jp16.py && ls -lh vol*.zip
 
       - uses: actions/upload-artifact@v4
         if: always()
