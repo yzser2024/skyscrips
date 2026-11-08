@@ -1,0 +1,45 @@
+name: probe-jp15
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 yt-dlp 与 ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python -m pip install -U yt-dlp
+          yt-dlp --version
+
+      - name: 下载全部曲目
+        run: |
+          mkdir -p out_jp15/mp3 out_jp15/raw
+          yt-dlp -f bestaudio \
+            --extract-audio --audio-format mp3 --audio-quality 0 \
+            --write-info-json --embed-metadata --no-overwrites \
+            --sleep-requests 1 --retries 5 --fragment-retries 5 \
+            -o "out_jp15/mp3/%(autonumber)03d_%(id)s_%(title).80s.%(ext)s" \
+            "https://soundcloud.com/tristeza0810/tracks" 2>&1 | tee out_jp15/log_jp15.txt || true
+
+      - name: 打包
+        if: always()
+        run: |
+          ls -la out_jp15/mp3 | head -20
+          du -sh out_jp15 || true
+          zip -r -q jp15_out.zip out_jp15 2>/dev/null || true
+          ls -lh jp15_out.zip || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp15-out
+          path: jp15_out.zip
+          if-no-files-found: warn
+          compression-level: 0
