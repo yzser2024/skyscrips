@@ -1,0 +1,20 @@
+name: probe-jp25
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 解析 89 首 play_url
+        run: python .github/scripts/probe_jp25.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp25-urls
+          path: out_jp25/play_urls.json
+          if-no-files-found: warn
+          compression-level: 0
