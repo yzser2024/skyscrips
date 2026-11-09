@@ -1,0 +1,60 @@
+name: probe-jp20
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 yt-dlp 与 ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python -m pip install -U yt-dlp
+          yt-dlp --version
+
+      - name: 下载第二账号全部 37 首
+        run: |
+          mkdir -p out_jp20/mp3
+          yt-dlp -f bestaudio \
+            --extract-audio --audio-format mp3 --audio-quality 0 \
+            --write-info-json --embed-metadata --no-overwrites \
+            --sleep-requests 1 --retries 5 --fragment-retries 5 \
+            --playlist-end 50 \
+            -o "out_jp20/mp3/%(autonumber)03d_%(id)s_%(title).80s.%(ext)s" \
+            "https://soundcloud.com/soukamakoto417/tracks" 2>&1 | tee out_jp20/log_jp20.txt || true
+          ls -la out_jp20/mp3 | tail -5
+          echo "count:" $(ls out_jp20/mp3/*.mp3 2>/dev/null | wc -l)
+          du -sh out_jp20
+
+      - name: 分卷打包（每卷 15 首）
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob,os,zipfile
+          fs=sorted(glob.glob('out_jp20/mp3/*.mp3'))
+          print('mp3',len(fs))
+          for i in range(0,len(fs),15):
+              zname='out_jp20/vol%d.zip'%(i//15+1)
+              with zipfile.ZipFile(zname,'w',zipfile.ZIP_STORED) as z:
+                  for f in fs[i:i+15]:
+                      z.write(f, arcname=os.path.join('mp3',os.path.basename(f)))
+              print(zname,len(fs[i:i+15]))
+          with zipfile.ZipFile('out_jp20/vol_meta.zip','w',zipfile.ZIP_DEFLATED) as z:
+              for f in glob.glob('out_jp20/mp3/*.info.json')+glob.glob('out_jp20/log_jp20.txt'):
+                  z.write(f, arcname=os.path.basename(f))
+          PY
+          ls -lh out_jp20/*.zip || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp20-out
+          path: out_jp20/*.zip
+          if-no-files-found: warn
+          compression-level: 0
