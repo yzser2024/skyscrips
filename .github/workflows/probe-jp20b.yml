@@ -1,0 +1,53 @@
+name: probe-jp20b
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: 装 yt-dlp 与 ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python -m pip install -U yt-dlp
+      - name: 按 URL 列表逐首下载 31 首
+        run: |
+          mkdir -p out_jp20b/mp3
+          yt-dlp -a .github/scripts/jp20_urls.txt \
+            -f bestaudio --extract-audio --audio-format mp3 --audio-quality 0 \
+            --write-info-json --embed-metadata --no-overwrites \
+            --sleep-requests 1 --retries 6 --fragment-retries 6 \
+            --ignore-errors \
+            -o "out_jp20b/mp3/%(autonumber)03d_%(id)s_%(title).70s.%(ext)s" \
+            2>&1 | tee out_jp20b/log_jp20b.txt || true
+          echo "count:" $(ls out_jp20b/mp3/*.mp3 2>/dev/null | wc -l)
+          du -sh out_jp20b
+      - name: 分卷打包
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob,os,zipfile
+          fs=sorted(glob.glob('out_jp20b/mp3/*.mp3'))
+          print('mp3',len(fs))
+          for i in range(0,len(fs),12):
+              zname='out_jp20b/snd2_vol%d.zip'%(i//12+1)
+              with zipfile.ZipFile(zname,'w',zipfile.ZIP_STORED) as z:
+                  for f in fs[i:i+12]:
+                      z.write(f, arcname=os.path.join('mp3',os.path.basename(f)))
+              print(zname,len(fs[i:i+12]))
+          with zipfile.ZipFile('out_jp20b/snd2_meta.zip','w',zipfile.ZIP_DEFLATED) as z:
+              for f in glob.glob('out_jp20b/mp3/*.info.json')+glob.glob('out_jp20b/log_jp20b.txt'):
+                  z.write(f, arcname=os.path.basename(f))
+          PY
+          ls -lh out_jp20b/*.zip || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp20b-out
+          path: out_jp20b/*.zip
+          if-no-files-found: warn
+          compression-level: 0
