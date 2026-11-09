@@ -1,0 +1,31 @@
+name: probe-jp26
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 装 yt-dlp 与 ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python -m pip install -U yt-dlp
+      - name: 下载 crystal pool 音频（YouTube mXQl-mcWzhU）
+        run: |
+          mkdir -p out_jp26
+          yt-dlp "https://www.youtube.com/watch?v=mXQl-mcWzhU" \
+            -f bestaudio --extract-audio --audio-format mp3 --audio-quality 0 \
+            --embed-metadata --no-overwrites \
+            -o "out_jp26/crystal_pool.%(ext)s" 2>&1 | tee out_jp26/log.txt || true
+          ls -lh out_jp26
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jp26-out
+          path: out_jp26/*
+          if-no-files-found: warn
+          compression-level: 0
