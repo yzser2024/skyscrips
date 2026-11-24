@@ -1,0 +1,75 @@
+name: Build Windows x64 (win81 source)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@v4
+        with:
+          ref: dshu-win81-build
+          fetch-depth: 1
+
+      - name: Ensure git commit for build version
+        shell: bash
+        run: |
+          git config user.email build@local
+          git config user.name Build
+          if [ -z "$(git rev-parse HEAD 2>/dev/null)" ]; then
+            git add -A
+            git commit -m "baseline"
+          fi
+          git rev-parse HEAD
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+
+      - name: Verify Node version
+        shell: bash
+        run: node --version
+
+      - name: Setup pnpm 11.28.5 via corepack
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.28.5 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        shell: bash
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Verify tsconfig paths
+        shell: bash
+        run: pnpm run verify-tsconfig-paths
+
+      - name: Build
+        shell: bash
+        run: pnpm run build
+
+      - name: Package Windows x64 (unsigned)
+        shell: bash
+        run: pnpm run package:desktop:win:x64:unsigned
+
+      - name: Locate artifacts
+        shell: bash
+        run: |
+          echo "=== .desktop-build tree ==="
+          find apps/desktop/.desktop-build -maxdepth 4 -type f 2>/dev/null | head -80 || true
+          echo "=== candidate exe/msi/zip ==="
+          find apps/desktop/.desktop-build -type f \( -iname '*.exe' -o -iname '*.msi' -o -iname '*.zip' -o -iname '*.blockmap' \) 2>/dev/null | head -80 || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: win81-desktop-x64-unsigned
+          path: |
+            apps/desktop/.desktop-build/**
+          if-no-files-found: warn
+          retention-days: 7
