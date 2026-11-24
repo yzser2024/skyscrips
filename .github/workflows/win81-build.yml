@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: |
           cat > apps/desktop/.env.windows <<'EOF'
-          DSH_DESKTOP_APP_ID=com.deepseek.dsh
+          DSH_DESKTOP_APP_ID=com.deepseek.dsh.uncensored
           DSH_DESKTOP_AUTO_UPDATE_ENV=test
           DOWNLOAD_TEST_ORIGIN=
           DOWNLOAD_TEST_RELEASE_ID=eab06ff94045799c8db394b1cbd5bb06
