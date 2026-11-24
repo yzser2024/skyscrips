@@ -75,6 +75,7 @@ jobs:
         run: pnpm run package:desktop:win:x64:unsigned
 
       - name: Locate artifacts
+        if: always()
         shell: bash
         run: |
           echo "=== .desktop-build tree ==="
@@ -83,10 +84,14 @@ jobs:
           find apps/desktop/.desktop-build -type f \( -iname '*.exe' -o -iname '*.msi' -o -iname '*.zip' -o -iname '*.blockmap' \) 2>/dev/null | head -120 || true
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: win81-desktop-x64-unsigned
           path: |
-            apps/desktop/.desktop-build/**
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**/*.exe
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**/*.blockmap
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**/*.zip
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**/*.7z
           if-no-files-found: warn
           retention-days: 7
