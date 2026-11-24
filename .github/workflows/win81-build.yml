@@ -53,6 +53,23 @@ jobs:
         shell: bash
         run: pnpm run build
 
+      - name: Create .env.windows for unsigned local package
+        shell: bash
+        run: |
+          cat > apps/desktop/.env.windows <<'EOF'
+          DSH_DESKTOP_APP_ID=com.deepseek.dsh
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DOWNLOAD_TEST_ORIGIN=
+          DOWNLOAD_TEST_RELEASE_ID=eab06ff94045799c8db394b1cbd5bb06
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://test.example.com
+          DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://update.example.com
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://login.example.com"]}
+          DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_CONCURRENCY=4
+          DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3
+          EOF
+          echo "=== .env.windows created ==="
+          cat apps/desktop/.env.windows
+
       - name: Package Windows x64 (unsigned)
         shell: bash
         run: pnpm run package:desktop:win:x64:unsigned
@@ -61,9 +78,9 @@ jobs:
         shell: bash
         run: |
           echo "=== .desktop-build tree ==="
-          find apps/desktop/.desktop-build -maxdepth 4 -type f 2>/dev/null | head -80 || true
+          find apps/desktop/.desktop-build -maxdepth 5 -type f 2>/dev/null | head -120 || true
           echo "=== candidate exe/msi/zip ==="
-          find apps/desktop/.desktop-build -type f \( -iname '*.exe' -o -iname '*.msi' -o -iname '*.zip' -o -iname '*.blockmap' \) 2>/dev/null | head -80 || true
+          find apps/desktop/.desktop-build -type f \( -iname '*.exe' -o -iname '*.msi' -o -iname '*.zip' -o -iname '*.blockmap' \) 2>/dev/null | head -120 || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
