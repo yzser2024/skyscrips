@@ -1,24 +1,21 @@
 name: Build app.asar only (win81 port)
 
-# Produces ONLY app.asar for the existing Win7-patched Electron 44.2.0 runtime.
+# Produces app.asar (+ app.asar.unpacked) for the Win7-patched Electron 44.2.0
+# already installed on the target machine. The upstream `package:desktop:*`
+# pipeline downloads Electron 44.7.0 and bundles it into an installer, which is
+# what makes its output unable to start on Windows 8.1. Here we run only the
+# preparation half of that pipeline, then hand-pack the asar ourselves.
 #
-# The upstream `package:desktop:win:x64:unsigned` pipeline downloads Electron
-# 44.7.0 and bundles it into the installer, which is what makes the result
-# unable to start on Windows 8.1. Here we run only the preparation half of
-# that pipeline (the half that materialises the dsh/ closure), then hand-pack
-# app.asar ourselves and drop the bundled Electron entirely.
-#
-# Preparation order mirrors apps/desktop/scripts/package-target.ts (lines
-# 518-561) exactly:
-#   pack()            -> packed/dsh, packed/vendor, packed/landlock
-#   prepare:runtime   -> electron host + primary runtime
+# Preparation order mirrors apps/desktop/scripts/package-target.ts (518-561):
+#   pack()            -> packed/{dsh,vendor,landlock}
+#   prepare:runtime   -> electron host (used as the Node binary) + primary runtime
 #   prepare:packages  -> reads packed/*, emits package-set/
 #   prepare:dsh       -> materialises targets/win-x64/dsh/
 #
-# app.asar layout mirrors electron-builder-config.mjs `files`:
-#   lib/main.js, lib/welcome/**, lib/preload-*.cjs, renderer/**, package.json
-#   dsh/**                 <- the prepared closure
-#   dsh/node_modules/**    <- its node_modules
+# asar layout mirrors electron-builder-config.mjs `files` (157-173):
+#   lib/main.js, lib/operation-report-worker.js, lib/welcome/**,
+#   lib/preload-*.cjs, renderer/**, package.json, dsh/**, dsh/node_modules/**
+# and `asarUnpack` (82-87) applied via --unpack on the same globs.
 
 on:
   workflow_dispatch:
@@ -26,17 +23,14 @@ on:
 jobs:
   build-asar:
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 150
     env:
       DSH_DESKTOP_TARGET_PLATFORM: win32
       DSH_DESKTOP_TARGET_ARCH: x64
-      # The build orchestrator reads the non-public SELECTOR DSH_BUILD_CLIENT_PROFILE
-      # (scripts/build.ts:181: profile ?? process.env[CLIENT_BUILD_PROFILE_SELECTOR]).
-      # Selecting "local" makes resolveClientBuildEnvironment emit exactly
-      #   { DSH_CLIENT_BUILD_PROFILE: 'local', DSH_CLIENT_COMMIT_HASH, DSH_CLIENT_VERSION }
-      # which is what pack-local-packages.ts asserts against. Do NOT set
-      # DSH_CLIENT_BUILD_PROFILE / DSH_CLIENT_TITLE here: the assertion compares the
-      # exact key set, and "official" belongs only to signed release builds.
+      # Selector, not the recorded value: scripts/build.ts:181 reads
+      # DSH_BUILD_CLIENT_PROFILE to pick a profile, and 'local' makes the record
+      # contain exactly { DSH_CLIENT_BUILD_PROFILE: 'local', COMMIT_HASH, VERSION }
+      # which pack-local-packages.ts asserts against. Do not add DSH_CLIENT_TITLE.
       DSH_BUILD_CLIENT_PROFILE: local
     steps:
       - name: Checkout source branch
@@ -82,101 +76,88 @@ jobs:
         shell: bash
         run: pnpm run build
 
+      # ASCII-only, no heredoc indentation: desktop-file-settings.mjs parses the
+      # file verbatim and rejects keys that are not in the shared allowlist.
       - name: Create .env.windows
         shell: bash
         run: |
-          cat > apps/desktop/.env.windows <<'EOF'
-          DSH_DESKTOP_APP_ID=com.deepseek.dsh.uncensored
-          DSH_DESKTOP_AUTO_UPDATE_ENV=production
-          DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://policy.invalid
-          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={}
-          EOF
+          set -euo pipefail
+          printf '%s\n' \
+            'DSH_DESKTOP_APP_ID=com.deepseek.dsh.uncensored' \
+            'DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://policy.invalid' \
+            'DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={}' \
+            > apps/desktop/.env.windows
+          if LC_ALL=C grep -qP '[^\x20-\x7e]' apps/desktop/.env.windows; then
+            echo "::error::non-ASCII byte in .env.windows"; exit 1
+          fi
           cat apps/desktop/.env.windows
 
-      # pack() from package-target.ts: local tarballs for dsh, vendor, landlock.
+      # pack() from package-target.ts. pnpm resolves --pack-destination relative
+      # to the package directory, so every destination must be absolute.
       - name: Pack local packages (dsh / vendor / landlock)
         shell: bash
         run: |
-          set -o pipefail
-          PACKED=apps/desktop/.desktop-build/targets/win-x64/packed
-          mkdir -p "$PACKED/dsh" "$PACKED/vendor" "$PACKED/landlock"
-          # pnpm resolves --pack-destination relative to the package directory, so
-          # every destination below must be absolute or the tarballs land under
-          # the package's own tree instead of packed/.
-          ABS_DSh="$PWD/$PACKED/dsh"
+          set -euo pipefail
+          PACKED="apps/desktop/.desktop-build/targets/win-x64/packed"
+          ABS_DSH="$PWD/$PACKED/dsh"
           ABS_VENDOR="$PWD/$PACKED/vendor"
           ABS_LANDLOCK="$PWD/$PACKED/landlock"
+          mkdir -p "$ABS_DSH" "$ABS_VENDOR" "$ABS_LANDLOCK"
 
           echo "--- pack-local-packages -> packed/dsh"
-          pnpm exec tsx apps/desktop/scripts/pack-local-packages.ts --out "$ABS_DSh"
+          pnpm exec tsx apps/desktop/scripts/pack-local-packages.ts --out "$ABS_DSH"
 
           echo "--- desktop-host pack -> packed/dsh"
-          pnpm --dir apps/desktop-host pack --pack-destination "$ABS_DSh"
+          pnpm --dir apps/desktop-host pack --pack-destination "$ABS_DSH"
 
           echo "--- release:pack vendor -> packed/vendor"
           pnpm run release:pack --family vendor --out "$ABS_VENDOR"
 
-          echo "--- native/system build:ts + pack -> packed/landlock"
+          echo "--- native/system entry pack -> packed/landlock"
           pnpm --dir native/system run build:ts
           pnpm --dir native/system/packages/entry pack --pack-destination "$ABS_LANDLOCK"
 
           echo "=== packed contents ==="
-          for d in dsh vendor landlock; do
-            echo "  [$d] $(ls -1 "$PACKED/$d" 2>/dev/null | wc -l) files"
-          done
-          echo "=== verify desktop-host tarball present ==="
-          ls -1 "$ABS_DSh" | grep -i 'desktop-host' || echo "MISSING desktop-host tarball"
-          echo "=== verify node-addon-system tarball present ==="
-          ls -1 "$ABS_LANDLOCK" | grep -i 'node-addon-system' || echo "MISSING node-addon-system tarball"
+          for d in dsh vendor landlock; do echo "  [$d] $(ls -1 "$PACKED/$d" | wc -l) files"; done
+          echo "=== required tarballs ==="
+          ls -1 "$ABS_DSH" | grep -i 'dsh-desktop-host' || { echo "::error::desktop-host tarball missing"; exit 1; }
+          ls -1 "$ABS_LANDLOCK" | grep -i 'node-addon-system' || { echo "::error::node-addon-system tarball missing"; exit 1; }
 
-      # prepare:runtime downloads the Electron host used to run pnpm install.
-      # prepare.ts uses bare Node fetch with no proxy/mirror support, and the
-      # python-build-standalone archive comes from a GitHub Release, so transient
-      # network failures are expected. Retry with a longer timeout.
+      # prepare.ts uses bare Node fetch (no proxy support) and pulls
+      # python-build-standalone from a GitHub Release, so retry transient failures.
       - name: Prepare runtime (electron host + primary runtime)
         shell: bash
         run: |
-          set -o pipefail
+          set -uo pipefail
           export DSH_RESOURCE_DOWNLOAD_TIMEOUT_MS=600000
           for attempt in 1 2 3; do
+            LOG="prepare-runtime-$attempt.log"
             echo "=== prepare:runtime attempt $attempt ==="
-            if pnpm exec tsx apps/desktop/scripts/prepare-runtime.ts --defer-primary-runtime-smoke 2>&1 | tee prepare-runtime.log; then
-              echo "prepare:runtime succeeded on attempt $attempt"
+            if pnpm exec tsx apps/desktop/scripts/prepare-runtime.ts --defer-primary-runtime-smoke >"$LOG" 2>&1; then
+              cp "$LOG" prepare-runtime.log
+              tail -30 "$LOG"
               exit 0
             fi
-            echo "attempt $attempt failed; tail of log:"
-            tail -30 prepare-runtime.log || true
+            echo "=== attempt $attempt FAILED — full log ==="
+            cat "$LOG"
             if [ "$attempt" -lt 3 ]; then sleep 20; fi
           done
           echo "::error::prepare:runtime failed after 3 attempts"
           exit 1
 
-      # prepare:packages consumes packed/* and emits the package set.
-      #
-      # packed/landlock holds @deepseek-ai/node-addon-system (the Linux Landlock
-      # launcher). Its optionalDependencies list only darwin/linux variants, so on
-      # win32 pnpm packs nothing into that directory and prepare:packages would
-      # abort on the empty input ("contains no tarballs"). selectDesktopPackageClosure
-      # only recurses into optional deps that are actually present (line 94), so
-      # omitting the landlock input is safe for a Windows payload. Prefer it when
-      # the directory is empty and fall back to the default inputs otherwise.
+      # selectDesktopPackageClosure only recurses into optional deps that are
+      # present (prepare-package-set.ts:92-96), so a win32 payload omits the
+      # landlock launcher (its optionalDependencies are darwin/linux only).
       - name: Prepare package set
         shell: bash
         run: |
-          set -o pipefail
-          PACKED_DIR=apps/desktop/.desktop-build/targets/win-x64/packed
-          LANDLOCK_COUNT=$(ls -1 "$PACKED_DIR/landlock" 2>/dev/null | wc -l)
-          echo "packed/landlock entries: $LANDLOCK_COUNT"
-          if [ "$LANDLOCK_COUNT" -gt 0 ]; then
-            pnpm exec tsx apps/desktop/scripts/prepare-package-set.ts 2>&1 | tee prepare-packages.log
-          else
-            echo "landlock has no tarballs (expected on win32); passing explicit --from"
-            pnpm exec tsx apps/desktop/scripts/prepare-package-set.ts \
-              --from "$PACKED_DIR/dsh" \
-              --from "$PACKED_DIR/vendor" 2>&1 | tee prepare-packages.log
-          fi
+          set -euo pipefail
+          PACKED_DIR="$PWD/apps/desktop/.desktop-build/targets/win-x64/packed"
+          pnpm exec tsx apps/desktop/scripts/prepare-package-set.ts \
+            --from "$PACKED_DIR/dsh" \
+            --from "$PACKED_DIR/vendor" 2>&1 | tee prepare-packages.log
+          cat prepare-packages.log
 
-      # prepare:dsh materialises targets/win-x64/dsh/ (this is the asar payload).
       - name: Prepare dsh closure
         shell: bash
         run: |
@@ -190,71 +171,108 @@ jobs:
           ls -la apps/desktop/.desktop-build/targets/win-x64/ || true
           echo "=== dsh/ ==="
           ls -la apps/desktop/.desktop-build/targets/win-x64/dsh/ || true
-          du -sh apps/desktop/.desktop-build/targets/win-x64/dsh/ 2>/dev/null || true
+          du -sh apps/desktop/.desktop-build/targets/win-x64/dsh/ || true
 
+      # Mirrors electron-builder-config.mjs files[] (157-173). lib/welcome/** is
+      # mandatory: main.ts:861 serves design-platform.css from app.asar/lib/welcome.
       - name: Assemble asar root
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd apps/desktop
           DSH_DIR=".desktop-build/targets/win-x64/dsh"
-          if [ ! -f "$DSH_DIR/package.json" ]; then
-            echo "::error::no prepared dsh/package.json at $DSH_DIR"
-            find .desktop-build -maxdepth 6 -type d 2>/dev/null | head -80
-            exit 1
-          fi
-          du -sh "$DSH_DIR"
+          test -f "$DSH_DIR/package.json" || { echo "::error::dsh/package.json missing"; exit 1; }
+          test -f lib/welcome/design-platform.css || { echo "::error::lib/welcome/design-platform.css missing"; exit 1; }
 
           ROOT="$PWD/.asar-root"
           rm -rf "$ROOT"
-          mkdir -p "$ROOT/dsh"
+          mkdir -p "$ROOT/lib/welcome" "$ROOT/dsh"
 
-          cp -r lib "$ROOT/lib"
+          cp lib/main.js lib/operation-report-worker.js "$ROOT/lib/"
+          cp lib/preload-app.cjs lib/preload-mandatory.cjs lib/preload-platform-account.cjs \
+             lib/preload-update-dialog.cjs lib/preload-welcome.cjs "$ROOT/lib/"
+          cp -r lib/welcome/. "$ROOT/lib/welcome/"
           cp -r renderer "$ROOT/renderer"
           cp package.json "$ROOT/package.json"
-
           (cd "$DSH_DIR" && tar cf - .) | (cd "$ROOT/dsh" && tar xf -)
 
-          find "$ROOT" -type f \( -name '*.js.map' -o -name '*.cjs.map' -o -name '*.mjs.map' -o -name '*.tsbuildinfo' \) -delete || true
-
+          # electron-builder strips sourcemaps from node_modules; keep the same.
+          find "$ROOT/dsh" -type f \( -name '*.js.map' -o -name '*.cjs.map' -o -name '*.mjs.map' -o -name '*.tsbuildinfo' \) -delete || true
           echo "=== layout ==="
           ls -la "$ROOT"
           du -sh "$ROOT"
 
+      # Mirrors electron-builder-config.mjs extraMetadata (123-132), all fields.
       - name: Merge extraMetadata into package.json
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd apps/desktop
           node -e '
             const fs = require("node:fs");
             const p = ".asar-root/package.json";
             const j = JSON.parse(fs.readFileSync(p, "utf8"));
-            j.name = "deepseek-harness-uncensored";
-            j.dshDesktopAppId = "com.deepseek.dsh.uncensored";
-            try { j.dshUncensored = JSON.parse(fs.readFileSync("../../product.json", "utf8")); }
-            catch (e) { console.log("product.json skipped:", e.message); }
+            const base = j.version;
+            const m = /^(\d{4})\.(\d{4})\.(\d+)$/.exec(base);
+            const display = m ? `${m[1]}.${m[2].slice(0,2)}.${m[2].slice(2)}.${m[3]}` : base;
+            Object.assign(j, {
+              name: "deepseek-harness-uncensored",
+              dshDesktopAppId: "com.deepseek.dsh.uncensored",
+              dshUncensored: JSON.parse(fs.readFileSync("../../product.json", "utf8")),
+              dshDisplayVersion: display,
+              dshDesktopUpdateChannel: "latest",
+            });
+            if (m) j.shortVersionWindows = display;
             fs.writeFileSync(p, JSON.stringify(j, undefined, 2));
-            console.log("package.json name=" + j.name + " version=" + j.version);
+            console.log("metadata:", j.name, j.version, j.dshDisplayVersion, j.dshDesktopUpdateChannel, j.shortVersionWindows);
           '
 
-      - name: Pack app.asar
+      # Collect the PE files that must live OUTSIDE the asar. Upstream enforces
+      # this in windows-asar-unpack.mjs:61 (entry.unpacked !== true throws) and
+      # additionally compares bytes, so the unpack list is not optional.
+      - name: Compute PE unpack list
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd apps/desktop
-          npx --yes @electron/asar pack .asar-root app.asar
+          DSH_DIR=".desktop-build/targets/win-x64/dsh"
+          : > pe-list.txt
+          # Native payloads electron-builder always unpacks (electron-builder-config.mjs:82-87)
+          find "$DSH_DIR" -type f \( \
+              -name '*.node' -o -name '*.dll' -o -name '*.exe' -o -name '*.so' -o -name '*.dylib' -o -name '*.so.*' \
+            \) | sed "s|^$DSH_DIR/||" >> pe-list.txt
+          find "$DSH_DIR/node_modules/@vscode" -type d -name 'ripgrep-*' -exec find {} -type f -path '*/bin/rg*' \; 2>/dev/null \
+            | sed "s|^$DSH_DIR/||" >> pe-list.txt
+          sort -u pe-list.txt -o pe-list.txt
+          echo "PE files to unpack: $(wc -l < pe-list.txt)"
+          head -20 pe-list.txt
+
+      - name: Pack app.asar with unpacked PE
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd apps/desktop
+          ARGS=()
+          while IFS= read -r f; do
+            [ -n "$f" ] && ARGS+=("--unpack" "dsh/$f")
+          done < pe-list.txt
+          echo "asar args: ${#ARGS[@]} entries"
+          npx --yes @electron/asar pack .asar-root app.asar "${ARGS[@]}"
+          ls -la app.asar
           wc -c < app.asar
-          echo "=== dsh entries in asar ==="
-          npx --yes @electron/asar list app.asar | grep -c '^/dsh' || true
+          test -d app.asar.unpacked || { echo "::error::app.asar.unpacked not produced"; exit 1; }
+          echo "=== unpacked PE count ==="
+          find app.asar.unpacked -type f | wc -l
           echo "=== top entries ==="
           npx --yes @electron/asar list app.asar | awk -F/ 'NF==2' | head -20
 
-      - name: Upload app.asar
+      - name: Upload asar
         uses: actions/upload-artifact@v4
         with:
           name: dshu-app-asar
-          path: apps/desktop/app.asar
+          path: |
+            apps/desktop/app.asar
+            apps/desktop/app.asar.unpacked/**
           if-no-files-found: error
           retention-days: 30
 
@@ -264,8 +282,9 @@ jobs:
         with:
           name: prepare-logs
           path: |
-            prepare-runtime.log
+            prepare-runtime*.log
             prepare-packages.log
             prepare-dsh.log
+            apps/desktop/pe-list.txt
           if-no-files-found: ignore
           retention-days: 7
