@@ -84,7 +84,8 @@ jobs:
           export DSH_DESKTOP_TARGET_PLATFORM=win32
           export DSH_DESKTOP_TARGET_ARCH=x64
           cd apps/desktop
-          pnpm run prepare:runtime -- --defer-primary-runtime-smoke 2>&1 | tee prepare-runtime.log
+          # pnpm forwards extra args as positional args; call tsx directly instead.
+          pnpm exec tsx scripts/prepare-runtime.ts --defer-primary-runtime-smoke 2>&1 | tee prepare-runtime.log
 
       - name: Prepare package set
         shell: bash
@@ -103,7 +104,7 @@ jobs:
           export DSH_DESKTOP_TARGET_PLATFORM=win32
           export DSH_DESKTOP_TARGET_ARCH=x64
           cd apps/desktop
-          pnpm run prepare:dsh 2>&1 | tee prepare-dsh.log
+          pnpm exec tsx scripts/prepare-dsh.ts --defer-runtime-smoke 2>&1 | tee prepare-dsh.log
 
       - name: Inspect prepared tree
         shell: bash
