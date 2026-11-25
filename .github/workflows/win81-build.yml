@@ -30,11 +30,14 @@ jobs:
     env:
       DSH_DESKTOP_TARGET_PLATFORM: win32
       DSH_DESKTOP_TARGET_ARCH: x64
-      # Client build identity must be present BEFORE `pnpm run build`: the client
-      # artifacts record it and pack-local-packages.ts later verifies it matches
-      # OFFICIAL_CLIENT_BUILD_ENVIRONMENT in scripts/client-build-environment.ts.
-      DSH_CLIENT_BUILD_PROFILE: official
-      DSH_CLIENT_TITLE: DeepSeek Harness Uncensored
+      # The build orchestrator reads the non-public SELECTOR DSH_BUILD_CLIENT_PROFILE
+      # (scripts/build.ts:181: profile ?? process.env[CLIENT_BUILD_PROFILE_SELECTOR]).
+      # Selecting "local" makes resolveClientBuildEnvironment emit exactly
+      #   { DSH_CLIENT_BUILD_PROFILE: 'local', DSH_CLIENT_COMMIT_HASH, DSH_CLIENT_VERSION }
+      # which is what pack-local-packages.ts asserts against. Do NOT set
+      # DSH_CLIENT_BUILD_PROFILE / DSH_CLIENT_TITLE here: the assertion compares the
+      # exact key set, and "official" belongs only to signed release builds.
+      DSH_BUILD_CLIENT_PROFILE: local
     steps:
       - name: Checkout source branch
         uses: actions/checkout@v4
