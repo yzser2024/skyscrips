@@ -45,9 +45,11 @@ jobs:
         shell: bash
         run: pnpm install --no-frozen-lockfile
 
-      - name: Verify tsconfig paths
+      - name: Generate and verify tsconfig paths
         shell: bash
-        run: pnpm run verify-tsconfig-paths
+        run: |
+          pnpm run gen-tsconfig-paths
+          pnpm run verify-tsconfig-paths
 
       - name: Build
         shell: bash
