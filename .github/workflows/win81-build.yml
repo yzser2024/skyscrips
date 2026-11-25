@@ -2,16 +2,23 @@ name: Build app.asar only (win81 port)
 
 # Produces ONLY app.asar for the existing Win7-patched Electron 44.2.0 runtime.
 #
-# The upstream pipeline downloads Electron 44.7.0 and uses it two ways:
-#   1. as the Node host that runs `pnpm install --prod` for the dsh/ closure
-#   2. as the runtime that gets bundled into the installer
-# Only (1) matters here. Step (2) is what makes the resulting app unable to
-# start on Windows 8.1. So we let the upstream pipeline prepare the dsh/ tree,
-# then hand-pack app.asar ourselves and drop the bundled Electron entirely.
+# The upstream `package:desktop:win:x64:unsigned` pipeline downloads Electron
+# 44.7.0 and bundles it into the installer, which is what makes the result
+# unable to start on Windows 8.1. Here we run only the preparation half of
+# that pipeline (the half that materialises the dsh/ closure), then hand-pack
+# app.asar ourselves and drop the bundled Electron entirely.
 #
-# The target machine supplies Electron 44.2.0 (Win7-patched) plus the matching
-# app.asar.unpacked native modules; every native module version in this tree
-# matches that runtime exactly.
+# Preparation order mirrors apps/desktop/scripts/package-target.ts (lines
+# 518-561) exactly:
+#   pack()            -> packed/dsh, packed/vendor, packed/landlock
+#   prepare:runtime   -> electron host + primary runtime
+#   prepare:packages  -> reads packed/*, emits package-set/
+#   prepare:dsh       -> materialises targets/win-x64/dsh/
+#
+# app.asar layout mirrors electron-builder-config.mjs `files`:
+#   lib/main.js, lib/welcome/**, lib/preload-*.cjs, renderer/**, package.json
+#   dsh/**                 <- the prepared closure
+#   dsh/node_modules/**    <- its node_modules
 
 on:
   workflow_dispatch:
@@ -20,6 +27,9 @@ jobs:
   build-asar:
     runs-on: windows-2022
     timeout-minutes: 120
+    env:
+      DSH_DESKTOP_TARGET_PLATFORM: win32
+      DSH_DESKTOP_TARGET_ARCH: x64
     steps:
       - name: Checkout source branch
         uses: actions/checkout@v4
@@ -75,46 +85,62 @@ jobs:
           EOF
           cat apps/desktop/.env.windows
 
-      # prepare:runtime downloads Electron (needed as the Node host) and the
-      # primary runtime. --defer-primary-runtime-smoke keeps the run shorter.
+      # pack() from package-target.ts: local tarballs for dsh, vendor, landlock.
+      - name: Pack local packages (dsh / vendor / landlock)
+        shell: bash
+        run: |
+          set -o pipefail
+          PACKED=apps/desktop/.desktop-build/targets/win-x64/packed
+          mkdir -p "$PACKED/dsh" "$PACKED/vendor" "$PACKED/landlock"
+
+          echo "--- pack-local-packages -> packed/dsh"
+          pnpm exec tsx apps/desktop/scripts/pack-local-packages.ts --out "$PACKED/dsh" 2>&1 | tail -20
+
+          echo "--- desktop-host pack -> packed/dsh"
+          pnpm --dir apps/desktop-host pack --pack-destination "$PACKED/dsh" 2>&1 | tail -5
+
+          echo "--- release:pack vendor -> packed/vendor"
+          pnpm run release:pack --family vendor --out "$PACKED/vendor" 2>&1 | tail -10 || \
+            echo "WARN: release:pack vendor failed (may be unnecessary)"
+
+          echo "--- native/system build:ts + pack -> packed/landlock"
+          pnpm --dir native/system run build:ts 2>&1 | tail -10
+          pnpm --dir native/system/packages/entry pack --pack-destination "$PACKED/landlock" 2>&1 | tail -5
+
+          echo "=== packed contents ==="
+          for d in dsh vendor landlock; do
+            echo "  [$d] $(ls -1 "$PACKED/$d" 2>/dev/null | wc -l) files"
+          done
+
+      # prepare:runtime downloads the Electron host used to run pnpm install.
       - name: Prepare runtime (electron host + primary runtime)
         shell: bash
         run: |
           set -o pipefail
-          export DSH_DESKTOP_TARGET_PLATFORM=win32
-          export DSH_DESKTOP_TARGET_ARCH=x64
-          cd apps/desktop
-          # pnpm forwards extra args as positional args; call tsx directly instead.
-          pnpm exec tsx scripts/prepare-runtime.ts --defer-primary-runtime-smoke 2>&1 | tee prepare-runtime.log
+          pnpm exec tsx apps/desktop/scripts/prepare-runtime.ts --defer-primary-runtime-smoke 2>&1 | tee prepare-runtime.log
 
+      # prepare:packages consumes packed/* and emits the package set.
       - name: Prepare package set
         shell: bash
         run: |
           set -o pipefail
-          export DSH_DESKTOP_TARGET_PLATFORM=win32
-          export DSH_DESKTOP_TARGET_ARCH=x64
-          cd apps/desktop
-          pnpm run prepare:packages 2>&1 | tee prepare-packages.log
+          pnpm exec tsx apps/desktop/scripts/prepare-package-set.ts 2>&1 | tee prepare-packages.log
 
-      # This is the step that materialises .desktop-build/targets/win-x64/dsh/.
+      # prepare:dsh materialises targets/win-x64/dsh/ (this is the asar payload).
       - name: Prepare dsh closure
         shell: bash
         run: |
           set -o pipefail
-          export DSH_DESKTOP_TARGET_PLATFORM=win32
-          export DSH_DESKTOP_TARGET_ARCH=x64
-          cd apps/desktop
-          pnpm exec tsx scripts/prepare-dsh.ts --defer-runtime-smoke 2>&1 | tee prepare-dsh.log
+          pnpm exec tsx apps/desktop/scripts/prepare-dsh.ts --defer-runtime-smoke 2>&1 | tee prepare-dsh.log
 
       - name: Inspect prepared tree
         shell: bash
         run: |
-          cd apps/desktop
-          echo "=== targets/win-x64 top level ==="
-          ls -la .desktop-build/targets/win-x64/ || true
+          echo "=== targets/win-x64 ==="
+          ls -la apps/desktop/.desktop-build/targets/win-x64/ || true
           echo "=== dsh/ ==="
-          ls -la .desktop-build/targets/win-x64/dsh/ || true
-          du -sh .desktop-build/targets/win-x64/dsh/ 2>/dev/null || true
+          ls -la apps/desktop/.desktop-build/targets/win-x64/dsh/ || true
+          du -sh apps/desktop/.desktop-build/targets/win-x64/dsh/ 2>/dev/null || true
 
       - name: Assemble asar root
         shell: bash
@@ -127,29 +153,25 @@ jobs:
             find .desktop-build -maxdepth 6 -type d 2>/dev/null | head -80
             exit 1
           fi
-          echo "DSH_DIR=$DSH_DIR"
           du -sh "$DSH_DIR"
 
           ROOT="$PWD/.asar-root"
           rm -rf "$ROOT"
           mkdir -p "$ROOT/dsh"
 
-          # Desktop shell entries (mirrors electron-builder `files`)
           cp -r lib "$ROOT/lib"
           cp -r renderer "$ROOT/renderer"
           cp package.json "$ROOT/package.json"
 
-          # Prepared dsh closure, including its node_modules
           (cd "$DSH_DIR" && tar cf - .) | (cd "$ROOT/dsh" && tar xf -)
 
-          # electron-builder strips these; match that
           find "$ROOT" -type f \( -name '*.js.map' -o -name '*.cjs.map' -o -name '*.mjs.map' -o -name '*.tsbuildinfo' \) -delete || true
 
           echo "=== layout ==="
           ls -la "$ROOT"
           du -sh "$ROOT"
 
-      - name: Merge electron extraMetadata into package.json
+      - name: Merge extraMetadata into package.json
         shell: bash
         run: |
           set -e
@@ -160,9 +182,8 @@ jobs:
             const j = JSON.parse(fs.readFileSync(p, "utf8"));
             j.name = "deepseek-harness-uncensored";
             j.dshDesktopAppId = "com.deepseek.dsh.uncensored";
-            try {
-              j.dshUncensored = JSON.parse(fs.readFileSync("../../product.json", "utf8"));
-            } catch (e) { console.log("product.json not merged:", e.message); }
+            try { j.dshUncensored = JSON.parse(fs.readFileSync("../../product.json", "utf8")); }
+            catch (e) { console.log("product.json skipped:", e.message); }
             fs.writeFileSync(p, JSON.stringify(j, undefined, 2));
             console.log("package.json name=" + j.name + " version=" + j.version);
           '
@@ -174,10 +195,10 @@ jobs:
           cd apps/desktop
           npx --yes @electron/asar pack .asar-root app.asar
           wc -c < app.asar
-          echo "=== listing head ==="
-          npx --yes @electron/asar list app.asar | head -30
-          echo "=== dsh/ present? ==="
+          echo "=== dsh entries in asar ==="
           npx --yes @electron/asar list app.asar | grep -c '^/dsh' || true
+          echo "=== top entries ==="
+          npx --yes @electron/asar list app.asar | awk -F/ 'NF==2' | head -20
 
       - name: Upload app.asar
         uses: actions/upload-artifact@v4
@@ -193,15 +214,8 @@ jobs:
         with:
           name: prepare-logs
           path: |
-            apps/desktop/prepare-runtime.log
-            apps/desktop/prepare-packages.log
-            apps/desktop/prepare-dsh.log
+            prepare-runtime.log
+            prepare-packages.log
+            prepare-dsh.log
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Dump tree on failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "=== .desktop-build dirs ==="
-          find apps/desktop/.desktop-build -maxdepth 7 -type d 2>/dev/null | head -120 || true
