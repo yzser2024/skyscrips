@@ -1,0 +1,55 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    { "path": "../../core/scope" },
+    { "path": "../../core/agent" },
+    { "path": "../../core/session" },
+    { "path": "../../util/atomic-write" },
+    { "path": "../../preset/agent-preset-registry" },
+    { "path": "../../subprocess/win32-process" },
+    { "path": "../../ptc-runtime/ptc-runtime" },
+    { "path": "../../util/values" },
+    { "path": "../../extensions/cordis-host-runner" },
+    { "path": "../../boot/plugin-manager" },
+    { "path": "../../typert/protocol" },
+    { "path": "../../browser-use/browser-use" },
+    { "path": "../../credentials/credentials" },
+    { "path": "../../core/tools" },
+    { "path": "../../sandbox/sandbox-policy" },
+    { "path": "../../mcp/mcp-client" },
+    { "path": "../../mcp/rea" },
+    { "path": "../../ssh/ssh" },
+    { "path": "../security-proxy-local" },
+    { "path": "../../fs/fs" },
+    { "path": "../../fs/fs-sandbox" },
+    { "path": "../../sandbox/sandbox" },
+    { "path": "../../llm/llm" },
+    { "path": "../../subprocess/subprocess" },
+    { "path": "../../subprocess/subprocess-local" },
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../../util/timeout"
+    },
+    {
+      "path": "../../web/web"
+    },
+    {
+      "path": "../../web/web-fetch-http"
+    }
+  ]
+}

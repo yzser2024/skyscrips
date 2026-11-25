@@ -1,0 +1,14 @@
+version: 1
+scenario: account-provider-signout
+profile: sdk
+permission: workspace-write
+composition: sdk-account-provider-signout
+recording: authored
+header:
+  class: sdk-account-provider-signout
+  pin: true
+  systemPromptSource: text-turn
+  toolSchemasSource: session/text-turn
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

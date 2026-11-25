@@ -1,0 +1,29 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../sandbox/sandbox" },
+    {
+      "path": "../fs-patch"
+    },
+    {
+      "path": "../../../vendor/cosmokit"
+    },
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../llm/llm"
+    },
+    {
+      "path": "../fs"
+    }
+  ]
+}

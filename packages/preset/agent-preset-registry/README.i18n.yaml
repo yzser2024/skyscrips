@@ -1,0 +1,52 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/preset/agent-preset-registry/README.md
+/:
+  en: e984a1ae0ffb6b97
+  zh: f1246772a5b47191
+/deepseek-ai-dsh-agent-preset-registry:
+  en: 6b6e424e5365953e
+  zh: f0bd3469bd33e690
+/deepseek-ai-dsh-agent-preset-registry/summary:
+  en: a451ec1d5b54b334
+  zh: 777d5043e9c2e9eb
+/deepseek-ai-dsh-agent-preset-registry/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: b3ad7867f23dad1c
+/deepseek-ai-dsh-agent-preset-registry/use-this-package:
+  en: 681cb2543f23216e
+  zh: 4c9f56c65d4f14d1
+/deepseek-ai-dsh-agent-preset-registry/use-this-package/minimal-configuration:
+  en: f78215323753af81
+  zh: bc753f8d93768858
+/deepseek-ai-dsh-agent-preset-registry/use-this-package/security-first-entry-acknowledgement:
+  en: 9101feef32b42469
+  zh: 6b41b84a1a66ce0d
+/deepseek-ai-dsh-agent-preset-registry/understand-the-implementation:
+  en: 10b0d809c4838100
+  zh: 8063ec6776b282ad
+/deepseek-ai-dsh-agent-preset-registry/further-exploration:
+  en: bc666cf3380a2788
+  zh: dfd59adb7e562791
+/deepseek-ai-dsh-agent-preset-registry/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-agent-preset-registry/model-experience/preset-selection:
+  en: 9c05062c86e3d148
+  zh: 2e894dd9d93b65ba
+/deepseek-ai-dsh-agent-preset-registry/model-experience/preset-selection/what-the-model-sees:
+  en: 9266e780cd183409
+  zh: b07bfe9fdb8b6f45
+/deepseek-ai-dsh-agent-preset-registry/model-experience/preset-selection/token-effect:
+  en: 5bc14d87cbb67afd
+  zh: 99f62bdfcb31ab90
+/deepseek-ai-dsh-agent-preset-registry/model-experience/preset-selection/kv-cache-effect:
+  en: 5e043b0b4ee03719
+  zh: a929e47776e209e0
+/deepseek-ai-dsh-agent-preset-registry/known-limitations-and-deferred-work:
+  en: a12b1276a9b56851
+  zh: 3a4a27b8db044925
+/deepseek-ai-dsh-agent-preset-registry/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 8ec3e73528ddb1a6

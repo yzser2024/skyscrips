@@ -1,0 +1,176 @@
+/** What the browser half registers, what the face reaches, and that it all leaves with the fiber. */
+
+import { Context } from '@deepseek-ai/cordis'
+import { describe, expect, it, vi } from 'vitest'
+import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { RemoteError, TestRemote } from '@deepseek-ai/dsh-client-test-runtime'
+import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
+import { apply as settingsApply, inject as settingsInject } from '@deepseek-ai/dsh-client-ui-settings/client'
+import { apply, inject } from '../src/client/index.ts'
+import type { MemoryRowFace } from '../src/client/index.ts'
+import { apply as hostApply } from '../src/index.ts'
+import { createMemoryController } from '../src/client/memory-controller.ts'
+
+const RECORD = {
+  id: 'm-1',
+  type: 'project-fact',
+  content: '构建命令是 pnpm run build',
+  scope: { global: false, workspace: 'workspace:a', mode: 'standard' },
+  source: { kind: 'user', confirmed: true },
+  status: 'enabled',
+  version: 1,
+  contentHash: 'hash',
+  createdAt: '2026-10-24T00:00:00.000Z',
+  updatedAt: '2026-10-24T00:00:00.000Z',
+} as const
+
+/** One browser bench with the settings section declared and the memory namespace scripted. */
+async function bench() {
+  const ctx = new Context()
+  await ctx.plugin(SlotRegistry).await()
+  const locale = new LocaleRuntime(ctx)
+  locale.setLocale('zh')
+  ctx.provide('locale', locale)
+  const describeMemory = vi.fn(() => Promise.resolve({
+    ok: true as const,
+    value: {
+      totalRecords: 1,
+      limits: { maxEntries: 6, maxEntryChars: 800, maxContextBytes: 4096, minRelevance: 0.2, maxContentChars: 4000 },
+      workspaces: [{ value: 'workspace:a', label: '仓库 A' }],
+      modes: [{ value: 'standard', label: 'standard' }],
+      extraction: { enabled: false, revision: 1 }, extractions: [],
+    },
+  }))
+  const listMemory = vi.fn(() => Promise.resolve({ ok: true as const, value: { records: [RECORD], sources: {} } }))
+  const removeMemory = vi.fn(() => Promise.resolve({ ok: true as const, value: { removed: true } }))
+  const createMemory = vi.fn(() => Promise.resolve({ ok: true as const, value: { record: RECORD } }))
+  new TestRemote(ctx, {
+    memory: {
+      describe: describeMemory,
+      list: listMemory,
+      create: createMemory,
+      update: vi.fn(),
+      setStatus: vi.fn(),
+      deleteRecord: removeMemory,
+    },
+  })
+  await ctx.plugin({ inject: [...settingsInject], apply: settingsApply }).await()
+  const slots = ctx.get('slots') as SlotRegistry
+  slots.register({
+    name: 'root',
+    children: { 'settings.general.item': { kind: 'list', scope: 'root' } },
+  } as never, () => null)
+  return { ctx, slots, describeMemory, listMemory, removeMemory, createMemory }
+}
+
+describe('ui-settings-memory apply', () => {
+  it('reviews a case note before creating a workspace-and-mode memory and keeps pending edits', async () => {
+    const { ctx, createMemory } = await bench()
+    try {
+      const controller = createMemoryController(ctx)
+      const seed = { title: 'acme · Timeline', content: 'Confirmed timeline', topic: 'case:acme:note:N-0001' }
+      await controller.showManager('security', 'workspace:a', seed)
+      expect(createMemory).not.toHaveBeenCalled()
+      controller.changeDraft({ content: 'Reviewed timeline' })
+      controller.closeManager()
+      await controller.showManager('security', 'workspace:b', { ...seed, content: 'Another note' })
+      expect(controller.hooks.memories.getSnapshot().toast?.key).toBe('draftPending')
+      await controller.saveDraft()
+      expect(createMemory).toHaveBeenCalledExactlyOnceWith({ ...seed, content: 'Reviewed timeline', type: 'project-fact',
+        scope: { global: false, workspace: 'workspace:a', mode: 'security' } })
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('preserves the mode entry point workspace when creating a new record', async () => {
+    const { ctx } = await bench()
+    try {
+      const controller = createMemoryController(ctx)
+      await controller.showManager('writing', 'workspace:selected')
+      controller.addDraft()
+      expect(controller.hooks.memories.getSnapshot().draft).toMatchObject({
+        mode: 'writing', workspace: 'workspace:selected', shareGlobal: false,
+      })
+      expect(controller.hooks.memories.getSnapshot().description?.totalRecords).toBe(1)
+      controller.closeManager()
+      expect(controller.hooks.memories.getSnapshot().draft?.workspace).toBe('workspace:selected')
+    } finally { await ctx.fiber.dispose() }
+  })
+  it('keeps the host Loader entry inert', () => {
+    expect(hostApply).not.toThrow()
+  })
+
+  it('declares the services it uses', () => {
+    expect(inject).toEqual(['slots', 'locale', 'remote', 'remote.memory'])
+  })
+
+  it('registers one General-settings row and removes it with the fiber', async () => {
+    const { ctx, slots } = await bench()
+
+    const fiber = await ctx.plugin({ inject: [...inject], apply }).await()
+
+    await vi.waitFor(() => { expect(slots.entries('settings.general.item')).toHaveLength(1) })
+    const entry = slots.entries('settings.general.item')[0]
+    expect(entry?.options).toMatchObject({ id: 'memory', order: 8 })
+    // The row stays inside the existing General section: no sixth navigation group.
+    expect(slots.entries('settings.section').some(section => section.options.id === 'memory')).toBe(false)
+
+    await fiber.dispose()
+    expect(slots.entries('settings.general.item')).toHaveLength(0)
+  })
+
+  it('reaches the Host namespace only when the row asks, and reports failures', async () => {
+    const { ctx, slots, describeMemory, listMemory } = await bench()
+    const fiber = await ctx.plugin({ inject: [...inject], apply }).await()
+    await vi.waitFor(() => { expect(slots.entries('settings.general.item')).toHaveLength(1) })
+    // Nothing is fetched during apply.
+    expect(describeMemory).not.toHaveBeenCalled()
+    expect(listMemory).not.toHaveBeenCalled()
+
+    const entry = slots.entries('settings.general.item')[0]
+    const face = (entry?.inject as () => MemoryRowFace & Record<string, unknown>)()
+    await face.open()
+    expect(describeMemory).toHaveBeenCalledOnce()
+    expect(listMemory).toHaveBeenCalledOnce()
+    expect(face.hooks.memories.getSnapshot().records).toHaveLength(1)
+
+    face.askDelete(RECORD as never)
+    await face.confirmDelete()
+    expect(face.hooks.memories.getSnapshot().records).toHaveLength(1)
+    await fiber.dispose()
+  })
+
+  it('maps a Host refusal onto the row error state', async () => {
+    const { ctx, slots, createMemory } = await bench()
+    createMemory.mockResolvedValueOnce({
+      ok: false,
+      error: new RemoteError('memory/invalid', 'cannot store', { reason: 'too long' }),
+    } as never)
+    const fiber = await ctx.plugin({ inject: [...inject], apply }).await()
+    await vi.waitFor(() => { expect(slots.entries('settings.general.item')).toHaveLength(1) })
+    const entry = slots.entries('settings.general.item')[0]
+    const face = (entry?.inject as () => MemoryRowFace & Record<string, unknown>)()
+    await face.saveDraft()
+    expect(face.hooks.memories.getSnapshot().error).toBeUndefined()
+
+    face.addDraft()
+    face.changeDraft({ content: '新的项目事实', workspace: 'workspace:a' })
+    await face.saveDraft()
+    expect(face.hooks.memories.getSnapshot().error).toBe('invalid')
+    expect(face.hooks.memories.getSnapshot().draft?.content).toBe('新的项目事实')
+    await fiber.dispose()
+  })
+
+  it('surfaces a failed describe as an error instead of throwing', async () => {
+    const { ctx, slots, describeMemory } = await bench()
+    describeMemory.mockResolvedValueOnce({
+      ok: false,
+      error: new RemoteError('memory/unavailable', 'storage unavailable', { reason: 'storage' }),
+    } as never)
+    const fiber = await ctx.plugin({ inject: [...inject], apply }).await()
+    await vi.waitFor(() => { expect(slots.entries('settings.general.item')).toHaveLength(1) })
+    const face = (slots.entries('settings.general.item')[0]?.inject as () => MemoryRowFace & Record<string, unknown>)()
+    await face.open()
+    expect(face.hooks.memories.getSnapshot().error).toBe('unavailable')
+    await fiber.dispose()
+  })
+})

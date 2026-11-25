@@ -1,0 +1,27 @@
+- button "New session"
+- button "Collapse sidebar"
+- button "New session": New Session
+- navigation "Global panels":
+  - button "Automation tasks"
+  - button "Unpin Automation tasks from sidebar"
+  - button "More"
+- text: Workspaces
+- button "Search sessions"
+- textbox "Search session names"
+- button "View options"
+- button "Add workspace"
+- tree "Sessions":
+  - treeitem "workspace" [expanded]
+  - treeitem "New Session" [selected]
+- button "Account menu": More
+- banner:
+  - button "Open right sidebar"
+- text: Explore the Unknown, More Freely
+- button "Choose workspace": workspace
+- button "Default"
+- textbox "Describe what you want to build, / commands, @ files or sessions":
+  - paragraph
+- button "Add files or run commands"
+- 'button "Access mode, current: Full access"': Full access
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]

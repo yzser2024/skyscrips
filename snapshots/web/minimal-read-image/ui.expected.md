@@ -1,0 +1,38 @@
+- banner:
+  - navigation "Session hierarchy": Use read_image to inspect red.png.
+  - 'button "Conversation mode: Minimal mode" [disabled]': Minimal mode
+  - button "Side question"
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: Use read_image to inspect red.png. Then reply exactly MINIMAL_IMAGE_OK and stop. {{clock}}
+- button "Copy"
+- status: Completed
+- button "Completed in {{duration}}" [disabled] [expanded]
+- button "Context injection runtime-context"
+- button "Read image red.png" [expanded]:
+  - text: Read image
+  - button "red.png"
+- button "red.png, click to view original":
+  - img "red.png"
+- text: {{cwd}}/red.png 1x1px, 69 bytes
+- button "Inspect"
+- paragraph: MINIMAL_IMAGE_OK
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Workspace Write"': Workspace Write
+- button "Select model, current DeepSeek-V4-Flash-Vision-Exp, reasoning effort high": DeepSeek-V4-Flash-Vision-Exp high
+- button "Send message" [disabled]
+- 'button "Turns: 1 · Steps: 2 · {{throughput}} tok/s"': "Turns: 1 · Steps: {{throughput}} tok/s"
+- button "28 tok · Cache hit 0%": 28 tokCache hit 0%
+- 'button "Conversation cost: ￥0.000104"': ￥0.000104
+- 'button "Spending limits: Off"': "Off"
+- button "0% of context used": 0%

@@ -1,0 +1,98 @@
+/** Owned loopback endpoint for recorded database tool refusals. @module */
+import { Context } from '@deepseek-ai/cordis'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import Credentials from '@deepseek-ai/dsh-credentials-local'
+import schema from '@deepseek-ai/schemastery'
+import { createServer } from 'node:net'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import assert from 'node:assert/strict'
+import Protection from '../src/index.ts'
+import PostgresAudit from '../src/postgres.ts'
+import MysqlAudit from '../src/mysql.ts'
+import * as MysqlAgent from '../src/mysql-agent.ts'
+import * as PostgresAgent from '../src/postgres-agent.ts'
+import type { TargetRuleId } from '../src/types.ts'
+
+/** Cordis fixture name. */
+export const name = 'postgres-protection-snapshot'
+/** Use the shipped tool registry and credential provider. */
+export const inject = ['tools']
+
+/** Select a database write refusal fixture. */
+export const Config = schema.object({ mysqlWrite: schema.boolean().default(false), postgresSharedWrite: schema.boolean().default(false) })
+
+/** @param ctx - Dedicated snapshot owner. @param config - Fixture selection. */
+export async function apply(ctx: Context, config: { mysqlWrite?: boolean; postgresSharedWrite?: boolean }): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'dshu-postgres-snapshot-'))
+  ctx.effect(() => () => rm(root, { recursive: true, force: true }), 'postgres-snapshot.files')
+  await ctx.plugin(Credentials, { path: join(root, 'credentials.yaml'), dshHome: root, watch: false })
+  let connections = 0
+  const server = createServer((socket) => { connections++; socket.destroy() })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  let closeExecutor = (): Promise<void> => Promise.resolve()
+  ctx.effect(() => async () => {
+    await closeExecutor()
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => { if (error) reject(error); else resolve() })
+    })
+  }, 'postgres-snapshot.listener')
+  const address = server.address()
+  assert.ok(address !== null && typeof address !== 'string')
+  const resourceId = brandString<TargetRuleId>('74444444-4444-4444-8444-444444444444')
+  await ctx.plugin(Protection, { path: ':memory:', hostsFile: '' })
+  await ctx.inject(['targetProtection'], async (owner) => {
+    await owner.targetProtection.configure({ mainlandEnabled: false, rules: [{
+      id: resourceId,
+      name: 'owned production fixture', enabled: true, kind: 'database', environment: 'production',
+      protection: 'full', match: 'path', address: join(root, 'central-database.sqlite'),
+    }] }, 1)
+  })
+  if (config.mysqlWrite) {
+    const mysql = await ctx.plugin(MysqlAudit, { databases: [{ name: 'owned', hostname: '127.0.0.1', port: address.port,
+      tlsServerName: 'mysql.fixture.test', database: 'fixture', username: 'fixture', accountHost: '%',
+      passwordRef: 'MISSING_MYSQL_FIXTURE_PASSWORD', resourceIds: [resourceId], testTables: ['items'], sharedTestWrites: true }] })
+    closeExecutor = () => mysql.dispose()
+    await ctx.plugin(MysqlAgent)
+    await ctx.inject(['mysqlAudit'], (active) => {
+      active.effect(() => active.tools.register(defineTool({
+        name: 'verify_mysql_transport', description: 'Verify that the owned MySQL listener received no connection.', parameters: {},
+        output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+        execute() {
+          assert.ok(active.tools.get('mysql_test_write'))
+          assert.equal(connections, 0)
+          return Promise.resolve('Protected MySQL listener received zero connections.')
+        },
+      })))
+    })
+    return
+  }
+  const executor = await ctx.plugin(PostgresAudit, { databases: [{ name: 'owned', hostname: '127.0.0.1', port: address.port,
+    database: 'fixture', username: 'fixture', passwordRef: 'MISSING_POSTGRES_FIXTURE_PASSWORD', resourceIds: [resourceId],
+    sharedTestTables: config.postgresSharedWrite ? [{ schema: 'public', table: 'items' }] : [] }] })
+  const mysql = await ctx.plugin(MysqlAudit, { databases: [{ name: 'owned', hostname: '127.0.0.1',
+    tlsServerName: 'mysql.fixture.test', port: address.port, database: 'fixture', username: 'fixture', accountHost: '%',
+    passwordRef: 'MISSING_MYSQL_FIXTURE_PASSWORD', resourceIds: [resourceId] }] })
+  closeExecutor = async () => { await mysql.dispose(); await executor.dispose() }
+  await ctx.plugin(PostgresAgent)
+  await ctx.inject(['postgresAudit', 'mysqlAudit'], (active) => {
+    active.effect(() => active.tools.register(defineTool({
+      name: 'verify_postgres_transport', description: 'Verify that the owned PostgreSQL listener received no connection.', parameters: {},
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      async execute() {
+        assert.equal(active.tools.get('database_test_sql'), undefined)
+        assert.equal(active.tools.get('postgres_test_write') !== undefined, config.postgresSharedWrite === true)
+        await assert.rejects(active.postgresAudit.executeTestSql('owned', 'SELECT 1', [], AbortSignal.timeout(5_000)),
+          { code: 'POSTGRES_TEST_ONLY' })
+        await assert.rejects(active.mysqlAudit.inspect('owned', AbortSignal.timeout(5_000)), { code: 'TARGET_FULLY_PROTECTED' })
+        assert.equal(connections, 0)
+        return 'Protected PostgreSQL listener received zero connections.'
+      },
+    })))
+  })
+}

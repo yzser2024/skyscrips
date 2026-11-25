@@ -1,0 +1,13 @@
+version: 1
+scenario: desktop-context
+profile: sdk
+permission: workspace-write
+composition: sdk-desktop
+recording: authored
+header:
+  class: sdk-desktop
+  pin: true
+sessionFormat:
+  version: 4
+  coverage:
+    - behavior-update

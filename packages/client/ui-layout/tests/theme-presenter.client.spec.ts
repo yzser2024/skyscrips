@@ -1,0 +1,258 @@
+// @vitest-environment jsdom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { FontFamilies, ThemePreference, ThemeSnapshot } from '@deepseek-ai/dsh-client-ui-theme/client'
+import { fontFamilyVariable } from '@deepseek-ai/dsh-client-ui-theme/src/theme-settings.ts'
+import {
+  DARK_ATTRIBUTE, THEME_REVEAL_ATTRIBUTE, THEME_SOURCE_ATTRIBUTE, ThemePresenter,
+} from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
+
+const LIGHT_THEME_COLOR = 'rgb(255, 255, 255)'
+const DARK_THEME_COLOR = 'rgb(21, 21, 23)'
+
+function snapshot(
+  colorScheme: 'light' | 'dark',
+  tokens: Record<string, string> = {},
+  fontSize = 14,
+  preference: ThemePreference = colorScheme,
+  fontFamilies: FontFamilies = { text: '', code: '', terminal: '' },
+): ThemeSnapshot {
+  // The presenter must key off colorScheme, not the id — keep them distinct.
+  const active = { id: `${colorScheme}-test`, colorScheme, tokens }
+  return {
+    preference, sunLocation: 'auto', fontSizes: { text: fontSize, code: 11, terminal: 13 }, fontFamilies, active, themes: [active], revision: 1,
+  }
+}
+
+function clearThemePresentation(): void {
+  document.head.querySelectorAll('meta[name="theme-color"], style[data-theme-presenter-test]').forEach((node) => { node.remove() })
+}
+
+function themeColorMeta(): HTMLMetaElement | null {
+  return document.head.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+}
+
+beforeEach(() => {
+  clearThemePresentation()
+  document.documentElement.style.removeProperty('color-scheme')
+  document.documentElement.removeAttribute(THEME_SOURCE_ATTRIBUTE)
+  document.body.removeAttribute(DARK_ATTRIBUTE)
+  document.body.removeAttribute('style')
+  const style = document.createElement('style')
+  style.dataset.themePresenterTest = ''
+  style.textContent = `
+    body { background-color: ${LIGHT_THEME_COLOR}; }
+    body[${DARK_ATTRIBUTE}] { background-color: ${DARK_THEME_COLOR}; }
+  `
+  document.head.append(style)
+})
+
+afterEach(clearThemePresentation)
+
+describe('ThemePresenter', () => {
+  it('ignores delayed theme writes after replacement or disposal', () => {
+    const updates: (() => void)[] = []
+    Object.assign(document, {
+      startViewTransition: (update: () => void) => {
+        updates.push(update)
+        return { ready: Promise.resolve(), updateCallbackDone: Promise.resolve(), finished: Promise.resolve(), skipTransition: vi.fn() }
+      },
+    })
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    const presenter = new ThemePresenter()
+    try {
+      presenter.apply(snapshot('light'))
+      presenter.apply(snapshot('dark'))
+      presenter.apply(snapshot('dark', {}, 20))
+      for (const update of updates.splice(0)) update()
+      expect(document.body.style.getPropertyValue('--dsh-content-font-size')).toBe('20px')
+      presenter.apply(snapshot('light'))
+      presenter.dispose()
+      for (const update of updates) update()
+      expect(document.documentElement.style.colorScheme).toBe('')
+      expect(themeColorMeta()).toBeNull()
+    } finally {
+      presenter.dispose()
+      Reflect.deleteProperty(document, 'startViewTransition')
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('light scheme sets root color-scheme and leaves the dark attribute absent', () => {
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('light'))
+    expect(document.documentElement.style.colorScheme).toBe('light')
+    expect(document.body.hasAttribute(DARK_ATTRIBUTE)).toBe(false)
+    expect(themeColorMeta()?.content).toBe(LIGHT_THEME_COLOR)
+  })
+
+  it('dark scheme sets root color-scheme, the attribute, and metadata; switching to light updates one node', () => {
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('dark'))
+    const meta = themeColorMeta()
+    expect(document.documentElement.style.colorScheme).toBe('dark')
+    expect(document.body.hasAttribute(DARK_ATTRIBUTE)).toBe(true)
+    expect(meta?.content).toBe(DARK_THEME_COLOR)
+    presenter.apply(snapshot('light'))
+    expect(document.documentElement.style.colorScheme).toBe('light')
+    expect(document.body.hasAttribute(DARK_ATTRIBUTE)).toBe(false)
+    expect(themeColorMeta()).toBe(meta)
+    expect(meta?.content).toBe(LIGHT_THEME_COLOR)
+    expect(document.head.querySelectorAll('meta[name="theme-color"]')).toHaveLength(1)
+  })
+
+  it('applies tokens as inline variables and clears the previous set on theme change', () => {
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('dark', { '--dsw-alias-bg': '#111', '--dsw-alias-fg': '#eee' }))
+    expect(document.body.style.getPropertyValue('--dsw-alias-bg')).toBe('#111')
+    expect(document.body.style.getPropertyValue('--dsw-alias-fg')).toBe('#eee')
+    presenter.apply(snapshot('light', { '--dsw-alias-bg': '#fff' }))
+    expect(document.body.style.getPropertyValue('--dsw-alias-bg')).toBe('#fff')
+    // The old theme's extra variable is gone, not merged.
+    expect(document.body.style.getPropertyValue('--dsw-alias-fg')).toBe('')
+  })
+
+  it('publishes the content font size and follows changes', () => {
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('light'))
+    expect(document.body.style.getPropertyValue('--dsh-content-font-size')).toBe('14px')
+    expect(document.body.style.getPropertyValue('--dsh-code-font-size')).toBe('11px')
+    expect(document.body.style.getPropertyValue('--dsh-terminal-font-size')).toBe('13px')
+    presenter.apply(snapshot('light', {}, 17))
+    expect(document.body.style.getPropertyValue('--dsh-content-font-size')).toBe('17px')
+  })
+
+  it('publishes non-empty font lists and removes a list once it returns to the built-in stack', () => {
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('light', {}, 14, 'light', { text: '"Inter"', code: '"Iosevka"', terminal: '"Hack"' }))
+    // The presenter writes the same variables the ui-theme boot script and token sheet use.
+    for (const [kind, list] of [['text', '"Inter"'], ['code', '"Iosevka"'], ['terminal', '"Hack"']] as const) {
+      expect(document.body.style.getPropertyValue(fontFamilyVariable(kind))).toBe(list)
+    }
+    presenter.apply(snapshot('light', {}, 14, 'light', { text: '"Inter"', code: '"Iosevka"', terminal: '' }))
+    expect(document.body.style.getPropertyValue('--dsh-font-family-text')).toBe('"Inter"')
+    expect(document.body.style.getPropertyValue('--dsh-font-family-code')).toBe('"Iosevka"')
+    expect(document.body.style.getPropertyValue('--dsh-font-family-terminal')).toBe('')
+    presenter.apply(snapshot('light', {}, 14, 'light', { text: '', code: '"Iosevka"', terminal: '"MesloLGS NF"' }))
+    expect(document.body.style.getPropertyValue('--dsh-font-family-text')).toBe('')
+    expect(document.body.style.getPropertyValue('--dsh-font-family-terminal')).toBe('"MesloLGS NF"')
+    presenter.dispose()
+    expect(document.body.style.getPropertyValue('--dsh-font-family-code')).toBe('')
+    expect(document.body.style.getPropertyValue('--dsh-font-family-terminal')).toBe('')
+  })
+
+  it('publishes the theme source: system stays system, fixed preferences publish the resolved scheme', () => {
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('dark', {}, 14, 'system'))
+    expect(document.documentElement.getAttribute(THEME_SOURCE_ATTRIBUTE)).toBe('system')
+    presenter.apply(snapshot('dark'))
+    expect(document.documentElement.getAttribute(THEME_SOURCE_ATTRIBUTE)).toBe('dark')
+    presenter.dispose()
+    expect(document.documentElement.hasAttribute(THEME_SOURCE_ATTRIBUTE)).toBe(false)
+  })
+
+  it('publishes system for the sun preference until it has a location estimate', () => {
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('dark', {}, 14, 'sun'))
+    expect(document.documentElement.getAttribute(THEME_SOURCE_ATTRIBUTE)).toBe('system')
+    presenter.apply({ ...snapshot('dark', {}, 14, 'sun'), sun: { cityId: 'beijing', source: 'manual', daylight: false } })
+    expect(document.documentElement.getAttribute(THEME_SOURCE_ATTRIBUTE)).toBe('dark')
+    presenter.dispose()
+  })
+
+  it('handles a skipped capture without an unhandled rejection', async () => {
+    Object.assign(document, {
+      startViewTransition: (update: () => void) => {
+        update()
+        const ready = Promise.withResolvers<undefined>()
+        return {
+          ready: ready.promise, updateCallbackDone: Promise.resolve(), finished: Promise.resolve(),
+          skipTransition: () => { ready.reject(new DOMException('Transition was skipped', 'AbortError')) },
+        }
+      },
+    })
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    const presenter = new ThemePresenter()
+    try {
+      presenter.apply(snapshot('light'))
+      presenter.apply(snapshot('dark'))
+      presenter.apply(snapshot('light'))
+      expect(document.body.hasAttribute(DARK_ATTRIBUTE)).toBe(false)
+    } finally {
+      presenter.dispose()
+      Reflect.deleteProperty(document, 'startViewTransition')
+      vi.unstubAllGlobals()
+    }
+    await Promise.resolve()
+    expect(document.documentElement.hasAttribute(THEME_REVEAL_ATTRIBUTE)).toBe(false)
+  })
+
+  it('reports a failed theme update and releases the reveal', async () => {
+    const error = new Error('Theme update failed')
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    Object.assign(document, { startViewTransition: () => ({
+      ready: Promise.reject(error), updateCallbackDone: Promise.reject(error), finished: Promise.reject(error), skipTransition: vi.fn(),
+    }) })
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    const presenter = new ThemePresenter()
+    try {
+      presenter.apply(snapshot('light'))
+      presenter.apply(snapshot('dark'))
+      await vi.waitFor(() => { expect(document.documentElement.hasAttribute(THEME_REVEAL_ATTRIBUTE)).toBe(false) })
+      expect(warning).toHaveBeenCalledExactlyOnceWith('Could not apply the theme:', error)
+    } finally {
+      presenter.dispose()
+      warning.mockRestore()
+      Reflect.deleteProperty(document, 'startViewTransition')
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('runs a light/dark change in a view transition: a circle from a recent press, a fade otherwise', async () => {
+    const transitions: { finished: PromiseWithResolvers<undefined> }[] = []
+    Object.assign(document, {
+      startViewTransition: vi.fn((update: () => void) => {
+        update()
+        const finished = Promise.withResolvers<undefined>()
+        transitions.push({ finished })
+        return { ready: Promise.resolve(), updateCallbackDone: Promise.resolve(), finished: finished.promise, skipTransition: vi.fn() }
+      }),
+    })
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    try {
+      const presenter = new ThemePresenter()
+      presenter.apply(snapshot('light'))
+      expect(transitions).toHaveLength(0)
+      presenter.apply(snapshot('dark'))
+      expect(document.documentElement.getAttribute(THEME_REVEAL_ATTRIBUTE)).toBe('fade')
+      expect(document.body.hasAttribute(DARK_ATTRIBUTE)).toBe(true)
+      transitions[0]?.finished.resolve(undefined)
+      await vi.waitFor(() => { expect(document.documentElement.hasAttribute(THEME_REVEAL_ATTRIBUTE)).toBe(false) })
+      document.dispatchEvent(new MouseEvent('pointerdown', { clientX: 12, clientY: 34 }))
+      presenter.apply(snapshot('light'))
+      expect(document.documentElement.getAttribute(THEME_REVEAL_ATTRIBUTE)).toBe('circle')
+      expect(document.documentElement.style.getPropertyValue('--dsh-theme-reveal-x')).toBe('12px')
+      presenter.dispose()
+      expect(document.documentElement.hasAttribute(THEME_REVEAL_ATTRIBUTE)).toBe(false)
+      expect(document.documentElement.style.getPropertyValue('--dsh-theme-reveal-x')).toBe('')
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition')
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('dispose removes color-scheme, the attribute, the font-size axis, and every applied variable, sparing foreign inline styles', () => {
+    document.body.style.setProperty('--foreign', 'kept')
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('dark', { '--dsw-alias-bg': '#111' }))
+    const meta = themeColorMeta()
+    presenter.dispose()
+    expect(document.documentElement.style.colorScheme).toBe('')
+    expect(document.body.hasAttribute(DARK_ATTRIBUTE)).toBe(false)
+    expect(document.body.style.getPropertyValue('--dsw-alias-bg')).toBe('')
+    expect(document.body.style.getPropertyValue('--dsh-content-font-size')).toBe('')
+    expect(document.body.style.getPropertyValue('--dsh-code-font-size')).toBe('')
+    expect(document.body.style.getPropertyValue('--foreign')).toBe('kept')
+    expect(meta?.isConnected).toBe(false)
+  })
+})

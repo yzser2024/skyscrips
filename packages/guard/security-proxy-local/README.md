@@ -1,0 +1,122 @@
+---
+description: "Security-mode egress proxy provider: one configured upstream, loopback listeners separated by conversation and tool, and a bounded capture store that keeps each exchange as observed."
+kind: "package-reference"
+---
+
+# @deepseek-ai/dsh-security-proxy-local
+
+English | [中文](README.zh.md)
+
+## Summary
+
+This provider makes the security-mode proxy real. It owns the upstream address and its credential reference, a connection check that opens a real CONNECT through that upstream, separate loopback listeners per security conversation and tool so child processes reach the proxy without touching the Host environment, and a bounded store of captured exchanges. Only the `security` preset is covered; the model API, sign-in, balance, update checks, and every other mode keep their existing route because this plugin never installs a process-wide dispatcher.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Understand the implementation](#understand-the-implementation)
+- [Further Exploration](#further-exploration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
+
+<a id="use-this-package"></a>
+## Use this package
+
+The base bundle mounts it; a deployment states only where its settings live:
+
+```yaml
+- id: security-proxy
+  name: '@deepseek-ai/dsh-security-proxy-local'
+  config:
+    path: !!js dshHomePath('storages', 'security-proxy.json')
+```
+
+The feature is off by default. Settings, status, the connection check, the traffic list and detail, pause, and clear are the Remote namespace `securityProxy`; the [settings surface](../../client/ui-security-proxy/README.md) drives them.
+
+The upstream password is stored through `ctx.credentials` under `DSH_SECURITY_PROXY_PASSWORD` and resolved per operation. It is never written to the settings file, a flow, or an error message.
+
+The owner-only `exportCapture` Remote method returns a versioned `dshu-security-proxy-capture` JSON snapshot with all matching retained details, newest first. It keeps stored bodies and truncation markers verbatim, saves opaque CONNECT traffic as metadata, and records whether a filter was applied without echoing its search text. The truncation marker covers body limits applied during proxy capture, controlled response reads, and preparation for storage. When the stage is known, details and exports include `bodyLimits` with request and response storage flags and the response capture stage. `maxExportBytes` in the provider config defaults to 134217728 bytes (128 MiB), accepts 1024–536870912 bytes, and counts compact UTF-8 JSON plus one trailing newline. Larger results fail with `security-proxy/export-too-large`; no partial document is returned. It does not change capture retention or persisted settings.
+
+-----
+
+<a id="understand-the-implementation"></a>
+## Understand the implementation
+
+<details>
+<summary>Implementation internals — click to expand</summary>
+
+| Piece | Owner | Boundary |
+|---|---|---|
+| Settings document | `settings.ts` | Atomic temp-then-rename write, validated on load and on every patch; a malformed document keeps defaults and reports why. |
+| Capture store | `capture.ts` | Ring buffer with flow-count, body-byte, and retention caps. Masks recognized secrets in headers, URL fields and JSON/form bodies at append. |
+| Upstream transport | `upstream.ts` | `ProxyAgent` over the configured `http:`/`https:` URL; CONNECT is a verified `node:http(s)` request. TLS verification is never relaxed. Bytes received with the CONNECT response headers are preserved for the tunnel consumer. |
+| Per-session chain proxy | `chain.ts` | Loopback-only listener: plain HTTP is forwarded and captured in full; CONNECT is tunnelled and recorded as metadata only. |
+| Engine | `engine.ts` | Owns the dispatcher, listeners, status machine, controlled fetch, and the once-per-conversation reminder. |
+| Remote surface | `service.ts` | `get` reports status. The application owner can configure, set passwords, test, read captures, clear, and pause. |
+
+The controlled fetch follows same-origin redirects, classifies content with the web provider's own helpers, caps the decoded body, and records the exchange it actually sent and received. That is why an HTTPS target is fully visible for this one tool while a child process's HTTPS tunnel is not: nothing intercepts TLS, and the plaintext exists only where the application itself wrote the request.
+
+Status is `off`, `connecting`, `ready`, or `failed` with a machine reason (`invalid-config`, `unreachable`, `timeout`, `auth`, `tls`, `unknown`). A failed check never reports ready, and the underlying detail line carries no credential. Disabling the feature closes the dispatcher and every listener; a settings change that touches the address, protocol, or credentials does the same before re-verifying.
+
+Settings, password and capture-preference writes are serialized. Changing the upstream cancels its admitted operations before replacing the transport. Shutdown waits for requests, response cleanup and retiring session listeners, including listeners removed from the visible session map. The HTTP relay observes downstream backpressure and cancels its upstream when the client disconnects. If a response fails after its headers arrive, the capture keeps the HTTP status, headers and received byte count with the failed outcome. CONNECT's deadline covers the handshake; established ordinary tunnels last until an endpoint closes or their owner cancels them.
+
+Native egress leases share this upstream and capture store without adding another session listener. Their writer binds conversation/tool attribution and applies the same pause and retention controls. Reconfiguration, conversation withdrawal and provider shutdown cancel the lease and join the delegate's complete cleanup before releasing dependencies. A failed cleanup remains visible and prevents new native delegation until the Host restarts. A pending credential lookup is cancelled before delegation, without invoking a stop callback for work that was not published.
+
+`mountSecurityProxy` accepts an explicit engine factory. The engine's HTTP, opaque-tunnel and connection-probe methods provide execution points for an enforcing implementation. Tunnel byte counts include payload bytes that arrive with the CONNECT request. Use [the guarded provider](../target-protection/README.md) to apply mandatory target rules to these operations.
+
+The protected `executionScope` hook binds a route's Session before publishing its listener, and runs controlled fetches and relay callbacks in that scope. Connection checks use an explicitly unassigned scope. The default hook leaves requests unchanged; the guarded provider validates ownership for its audit store. Leaving Security mode withdraws that Session's listeners. A retiring or replaced listener rejects new forwarding immediately, and a pending listener cannot publish its address after withdrawal.
+
+`ChainOptions.executionScope` encloses each complete HTTP exchange or CONNECT tunnel, including response bodies and inspected requests. The callback receives an owner cancellation signal, combined with the listener's existing signals. Omitting this option preserves the listener's transport behavior. Cancellation after headers still closes both downstream and upstream before the scope settles.
+
+The exported `SessionChainProxy` owns loopback listening, forwarding, capture and socket cleanup. Its `ChainOptions` transport callbacks select and authorize their own route; the listener neither creates a dispatcher nor assumes an upstream. The Security engine supplies its private upstream, while native target protection can supply a per-execution pinned route. Both owners retain their resources through forwarding and closure.
+
+Generic non-session callers use `sessionId: null`. A missing capture sink disables retention; the Security engine continues to provide its bounded store and pause callback.
+
+An owner may supply `inspectTunnel` to authorize CONNECT before acknowledgement and consume it through an inspected transport. Its decrypted requests reuse the HTTP relay and capture store. The inspector must join its requests and sockets before returning; failures after acknowledgement close the transport instead of writing plaintext HTTP into TLS. The ordinary Security engine does not enable inspection.
+
+The reminder fires at most once per conversation, when a covered tool call finds the proxy off and the owner enabled the reminder; the set clears when the conversation is disposed.
+
+</details>
+
+-----
+
+<a id="further-exploration"></a>
+## Further Exploration
+
+- [Service Definition](../security-proxy/README.md) — the seam every consumer codes against.
+- [Settings surface](../../client/ui-security-proxy/README.md) — the Modes-section area, the connection check, and the traffic viewer.
+- [Outbound proxy library](../../util/http-proxy/README.md) — the launch-environment policy this plugin deliberately does not use.
+
+-----
+
+<a id="model-experience"></a>
+## Model Experience
+
+None by itself, with one exception worth stating: in a security conversation, `web_fetch` retrieves through this proxy, and a proxy failure reaches the tool result as a typed `WebError` code. The tool's schema, description, and rendering do not change.
+
+#### KV Cache effect
+
+No effect: routing changes no request content.
+
+## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
+
+- **Coverage** — `web_fetch`, proxy-aware commands and terminals, the Desktop sidebar, and newly launched Playwright MCP, Chrome DevTools MCP and Stagehand browsers are routed. The owner's sidebar endpoint uses the Host-resolved Agent; affected tabs reconnect after transport or mode changes. Ordinary MCP tool and resource requests use the session relay over Streamable HTTP or proxy variables with stdio. New ACP, Codex, Claude Code and DSH SDK delegates receive the parent session's proxy variables. Startup discovery, Web iframes and external browser attachments use their own routes. Recreate experimental browser activations after changing the route. Stagehand extension requests follow its browser proxy; the application model route stays separate.
+- **No interception** — HTTPS bodies carried by child processes stay sealed. Only the plaintext this application writes is captured.
+- **Loopback trust** — each session listener binds `127.0.0.1` on an operating-system-assigned port with no local authentication; another local process could use it while it is open. It closes with the conversation, with a settings change, and with Host shutdown.
+- **Record lifetime** — flows live in memory only and are lost on restart. Retention is capped by count, body bytes, and age.
+- **Target protection** — this ordinary provider does not enforce target rules. The optional `dsh-target-protection/security-proxy` implementation is mounted separately and has its own documented restrictions.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+The chain listener exists because a child process needs an address, not a policy object. Each listener retains one conversation and tool identity, so a later command cannot relabel traffic from an existing terminal.
+
+</details>

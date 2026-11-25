@@ -1,0 +1,10 @@
+version: 1
+scenario: bash-spill
+profile: headless
+composition: fs
+recording: authored
+header:
+  class: fs
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

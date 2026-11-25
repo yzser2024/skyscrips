@@ -1,0 +1,48 @@
+Fontkit 2.0.4 Mac OS encoding data attribution
+
+Fontkit's src/encodings.js contains eight single-byte mappings
+corresponding to the Apple vendor tables hosted by the Unicode Consortium.
+For each table, entries 0x80 through 0xFF match the referenced data
+except at 0xCA. Fontkit maps that byte to U+0020 in place of U+00A0.
+
+The Croatian, Greek, Icelandic, Central European, Romanian, and Turkish
+tables carry this copyright notice:
+(c) 1995-2002, 2005 by Apple Computer, Inc., all rights reserved.
+
+https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/CROATIAN.TXT
+https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/GREEK.TXT
+https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/ICELAND.TXT
+https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/CENTEURO.TXT
+https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/ROMANIAN.TXT
+https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/TURKISH.TXT
+
+The Gaelic and Inuit tables credit Michael Everson of Everson Typography
+for developing the character sets.
+
+https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/GAELIC.TXT
+https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/INUIT.TXT
+
+Standard header shared by all eight source tables
+(comment prefixes and trailing spaces removed):
+
+Apple, the Apple logo, and Macintosh are trademarks of Apple
+Computer, Inc., registered in the United States and other countries.
+Unicode is a trademark of Unicode Inc. For the sake of brevity,
+throughout this document, "Macintosh" can be used to refer to
+Macintosh computers and "Unicode" can be used to refer to the
+Unicode standard.
+
+Apple Computer, Inc. ("Apple") makes no warranty or representation,
+either express or implied, with respect to this document and the
+included data, its quality, accuracy, or fitness for a particular
+purpose. In no event will Apple be liable for direct, indirect,
+special, incidental, or consequential damages resulting from any
+defect or inaccuracy in this document or the included data.
+
+These mapping tables and character lists are subject to change.
+The latest tables should be available from the following:
+
+<http://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/>
+
+For general information about Mac OS encodings and these mapping
+tables, see the file "README.TXT".

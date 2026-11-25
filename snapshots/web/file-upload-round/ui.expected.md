@@ -1,0 +1,40 @@
+- banner:
+  - navigation "Session hierarchy": Read the attached file with
+  - 'button "Conversation mode: Default" [disabled]': Default
+  - button "Side question"
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: poem.txt TXT 16B
+- button "reference-1.png, click to view original":
+  - img "reference-1.png"
+- text: Read the attached file with the read tool, reply with exactly the single word it contains, and stop. {{clock}}
+- button "Copy"
+- status: Completed
+- button "Completed in {{duration}}" [disabled] [expanded]
+- button "Context injection runtime-context"
+- button "Context injection skill-catalog"
+- button "Context injection time-context"
+- button "Read {{cwd}}/.dsh-home/attachments/v1/files/29/29a0837077f6f3cbddd98c0605897cc6f2b4e5833fb8e1ca4a8045d89b2c8c60/poem.txt":
+  - text: Read
+  - button "{{cwd}}/.dsh-home/attachments/v1/files/29/29a0837077f6f3cbddd98c0605897cc6f2b4e5833fb8e1ca4a8045d89b2c8c60/poem.txt"
+- paragraph: UPLOAD_ROUND_OK
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- button "Usage 17.3K tok"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Full access"': Full access
+- button "Select model, current DeepSeek-V4-Flash-Vision-Exp, reasoning effort high": DeepSeek-V4-Flash-Vision-Exp high
+- button "Send message" [disabled]
+- 'button "Turns: 1 · Steps: 2 · {{throughput}} tok/s"': "Turns: 1 · Steps: {{throughput}} tok/s"
+- button "17.3K tok · Cache hit 51%": 17.3K tokCache hit 51%
+- 'button "Conversation cost: ￥0.02"': ￥0.02
+- 'button "Spending limits: Off"': "Off"
+- button "1% of context used": 1%

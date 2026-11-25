@@ -1,0 +1,25 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/guard/README.md
+/:
+  en: 72f11f67ca4ab3c7
+  zh: d758a9206cab6102
+/guard-execution-policies:
+  en: 4865215bf6b9878b
+  zh: 5cf83e5079edb29d
+/guard-execution-policies/summary:
+  en: c8eb145069897bcd
+  zh: 18a88def43bd5657
+/guard-execution-policies/table-of-contents:
+  en: 1eb35b015a6c423f
+  zh: a8a3dceee2c9e943
+/guard-execution-policies/packages:
+  en: 422149facdcfe73d
+  zh: c5e992d234a73475
+/guard-execution-policies/related-documentation:
+  en: 89d9b856c6369f39
+  zh: e3311f91dd8a32d7
+/guard-execution-policies/dev-note:
+  en: 5de1d6304e00c58f
+  zh: 8d8225361cfa29e5

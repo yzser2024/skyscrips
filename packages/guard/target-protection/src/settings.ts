@@ -1,0 +1,253 @@
+/** Owner Remote operations and live status for guarded execution providers. @module */
+import type { Context } from '@deepseek-ai/cordis'
+import type { SecurityProtectionCapability, SecurityProtectionStatus } from '@deepseek-ai/dsh-agent-preset-registry/types'
+import { TargetProtectionError } from '@deepseek-ai/dsh-target-protection'
+import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import type { TargetAuditHistory } from './audit.ts'
+import type { CountryDatabaseStatus } from './country.ts'
+import type {} from './country-provider.ts'
+import type {} from './index.ts'
+import type {} from './sqlite.ts'
+import type {} from './postgres.ts'
+import type {} from './mysql.ts'
+import type { TargetPreferences, TargetSnapshot, TargetSshCoverage } from './types.ts'
+
+export type { TargetAuditHistory, TargetAuditRecord, TargetAuditEntry, TargetAuditId } from './audit.ts'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Present only while the ordinary HTTP route is registered with mandatory protection. */
+    targetProtectedHttp: true
+    /** Present only while the guarded independent proxy is mounted. */
+    targetProtectedProxy: true
+    /** Present while the local filesystem provider enforces target rules. */
+    targetProtectedFiles: true
+    /** Process protection installed by the active subprocess provider. */
+    targetProtectedSubprocess: Exclude<TargetProtectedProcessMode, 'missing'>
+    /** Authenticated application owner's rule settings. */
+    targetProtectionSettings: TargetProtectionSettings
+  }
+}
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface RemoteErrorDetailsMap {
+    /** Rule settings require a live authenticated application owner. */
+    'target-protection/owner-required': Record<string, never>
+    'target-protection/invalid': Record<string, never>
+    'target-protection/conflict': Record<string, never>
+    'target-protection/busy': Record<string, never>
+    'target-protection/unavailable': Record<string, never>
+    'target-protection/unsupported-version': Record<string, never>
+    'target-protection/unrecognized-store': Record<string, never>
+    'target-protection/country-update-failed': Record<string, never>
+  }
+}
+
+/** Current durable rules and the live enforcement and country-data status. */
+export interface TargetProtectionSettingsState {
+  snapshot: TargetSnapshot
+  protection: SecurityProtectionStatus
+  country: CountryDatabaseStatus | null
+  /** Mounted guarded routes. Older Hosts omit this information. */
+  routes?: TargetProtectionRoutes
+  /** Guarded executor coverage. Older Hosts omit this information. */
+  execution?: TargetProtectionExecution
+  /** Available only for a provider with a managed DB-IP cache. */
+  countryUpdateAvailable?: true
+}
+
+/** Which optional HTTP enforcement providers the Host has mounted. */
+export interface TargetProtectionRoutes {
+  readonly webFetch: boolean
+  readonly independentProxy: boolean
+}
+
+/** Mounted process policy, independent of whether any target rules are enabled. */
+export type TargetProtectedProcessMode = 'missing' | 'admission-only' | 'native-gateway' | 'native-offline'
+
+/** Mounted execution providers and verified SSH connections with mandatory target-rule checks. */
+export interface TargetProtectionExecution {
+  readonly files: boolean
+  readonly processes: TargetProtectedProcessMode
+  /** Verified connections, absent on older Hosts. */
+  readonly ssh?: TargetSshCoverage
+  /** Loaded binding counts; null means the provider is absent. */
+  readonly databases?: {
+    readonly sqlite: number | null
+    readonly postgres: number | null
+    readonly mysql: number | null
+  }
+}
+
+/** Replace all rules only against the revision the owner edited. */
+export interface TargetProtectionSettingsUpdate {
+  preferences: TargetPreferences
+  expectedRevision: number
+}
+
+const statusServices = new Set([
+  'targetProtection', 'targetCountryData', 'targetProtectedHttp', 'targetProtectedProxy', 'securityProtection',
+  'targetProtectedFiles', 'targetProtectedSubprocess',
+  'sqliteDatabase', 'postgresAudit', 'mysqlAudit',
+])
+
+function ownerRuleError(error: unknown): unknown {
+  return error instanceof TargetProtectionError
+    ? new RemoteError(`target-protection/${error.code}`, error.message, {})
+    : error
+}
+
+/** Connect durable rules and verified transport readiness to owner settings and Security entry. */
+export default class TargetProtectionSettings extends TypertRemoteService {
+  static inject = ['targetProtection']
+  private statusRevision = 0
+  private statusIdentity = ''
+
+  /** @param ctx - Profile with the durable target registry and optional guarded transports. */
+  constructor(ctx: Context) {
+    super(ctx, 'targetProtectionSettings')
+    const changed = () => {
+      try { ctx.emit('security-protection/changed') }
+      catch (error) { ctx.logger.warn('A security protection status observer failed.', error) }
+      try { ctx.emit('target-protection/status-changed') }
+      catch (error) { ctx.logger.warn('A target settings observer failed.', error) }
+    }
+    ctx.on('target-protection/changed', changed)
+    ctx.on('target-country/changed', changed)
+    ctx.on('target-protection/execution-changed', changed)
+    ctx.on('internal/service', (name) => { if (statusServices.has(name)) changed() })
+    ctx.provide('securityProtection', { read: () => this.currentProtection() })
+  }
+
+  private ownerSignal(): AbortSignal {
+    const invocation = this.ctx.invocation
+    if (invocation?.peer.principal.kind !== 'owner') {
+      throw new RemoteError('target-protection/owner-required', 'Only the connected application owner can access target rules.', {})
+    }
+    const signal = AbortSignal.any([invocation.signal, invocation.peer.signal])
+    signal.throwIfAborted()
+    return signal
+  }
+
+  private routes(): TargetProtectionRoutes {
+    return { webFetch: this.ctx.get('targetProtectedHttp') === true, independentProxy: this.ctx.get('targetProtectedProxy') === true }
+  }
+
+  private execution(): TargetProtectionExecution {
+    return {
+      files: this.ctx.get('targetProtectedFiles') === true,
+      processes: this.ctx.get('targetProtectedSubprocess') ?? 'missing',
+      ssh: this.ctx.get('targetProtection')?.sshCoverage() ?? { connections: 0, pathProtectedConnections: 0 },
+      databases: {
+        sqlite: this.ctx.get('sqliteDatabase')?.names().length ?? null,
+        postgres: this.ctx.get('postgresAudit')?.names().length ?? null,
+        mysql: this.ctx.get('mysqlAudit')?.names().length ?? null,
+      },
+    }
+  }
+
+  private readCountry(): CountryDatabaseStatus | null {
+    try { return this.ctx.get('targetCountryData')?.status() ?? null }
+    catch (error) {
+      if (error instanceof TargetProtectionError && error.code === 'unavailable') return null
+      throw error
+    }
+  }
+
+  private currentProtection(): SecurityProtectionStatus {
+    let snapshot: TargetSnapshot | undefined
+    try { snapshot = this.ctx.get('targetProtection')?.currentSnapshot() }
+    catch (error) {
+      if (!(error instanceof TargetProtectionError)) throw error
+    }
+    return this.readProtection(snapshot)
+  }
+
+  private readProtection(
+    snapshot: TargetSnapshot | undefined, country = this.readCountry(), routes = this.routes(),
+  ): SecurityProtectionStatus {
+    const audit = this.ctx.get('targetProtection')?.auditWriteState()
+    const guarded = routes.webFetch && routes.independentProxy && snapshot !== undefined
+      && audit !== undefined && audit !== 'unavailable'
+    const capabilities: SecurityProtectionCapability[] = []
+    if (guarded && snapshot.preferences.rules.some(rule => rule.enabled)) capabilities.push('target-rules')
+    const state = !guarded ? 'unavailable' : !snapshot.preferences.mainlandEnabled ? 'disabled'
+      : country?.state === 'ready' ? 'enabled' : 'unavailable'
+    if (state === 'enabled') capabilities.unshift('mainland-domains')
+    const identity = JSON.stringify([
+      snapshot?.revision, country?.sha256, country?.state, routes, this.execution(), audit, state, capabilities,
+    ])
+    if (identity !== this.statusIdentity) { this.statusIdentity = identity; this.statusRevision++ }
+    return { state, capabilities, revision: this.statusRevision }
+  }
+
+  /**
+   * Return the editable rule revision and current enforcement availability to the owner.
+   * @returns Durable rule snapshot and live protected-route and country status.
+   */
+  @Remote
+  get(): TargetProtectionSettingsState {
+    this.ownerSignal()
+    return this.currentState()
+  }
+
+  /**
+   * Read recent protection decisions for the authenticated owner.
+   * @returns The audit availability and latest decisions, newest first.
+   * @throws When the stored records cannot be read or validated.
+   */
+  @Remote
+  auditHistory(): TargetAuditHistory {
+    this.ownerSignal()
+    try { return this.ctx.targetProtection.auditHistory() }
+    catch (error) { throw ownerRuleError(error) }
+  }
+
+  private state(snapshot: TargetSnapshot): TargetProtectionSettingsState {
+    const routes = this.routes(), country = this.readCountry()
+    return { snapshot, routes, execution: this.execution(), protection: this.readProtection(snapshot, country, routes), country,
+      ...this.ctx.get('targetCountryData')?.canUpdate() === true ? { countryUpdateAvailable: true } : {} }
+  }
+
+  private currentState(): TargetProtectionSettingsState {
+    try { return this.state(this.ctx.targetProtection.currentSnapshot()) }
+    catch (error) { throw ownerRuleError(error) }
+  }
+
+  /**
+   * Save one versioned rule edit for an authenticated owner.
+   * @param update - Replacement settings and their expected revision.
+   * @returns The new rule revision with the effective protection status.
+   */
+  @Remote
+  async configure(update: TargetProtectionSettingsUpdate): Promise<TargetProtectionSettingsState> {
+    const signal = this.ownerSignal()
+    const routes = this.routes()
+    if (!routes.webFetch || !routes.independentProxy) throw new RemoteError('target-protection/unavailable', 'The guarded HTTP routes are unavailable.', {})
+    try {
+      const snapshot = await this.ctx.targetProtection.configure(update.preferences, update.expectedRevision, signal)
+      return this.state(snapshot)
+    } catch (error) { throw ownerRuleError(error) }
+  }
+
+  /**
+   * Check the official DB-IP release and apply a verified newer country database for this Host.
+   * @returns Live protection and country data status after the check.
+   */
+  @Remote
+  async updateCountry(): Promise<TargetProtectionSettingsState> {
+    const signal = this.ownerSignal()
+    const provider = this.ctx.get('targetCountryData')
+    if (provider === undefined || !provider.canUpdate()) {
+      throw new RemoteError('target-protection/unavailable', 'Managed country updates are unavailable.', {})
+    }
+    try { await provider.update(signal) }
+    catch (error) {
+      if (error instanceof TargetProtectionError) {
+        throw new RemoteError('target-protection/country-update-failed', error.message, {})
+      }
+      throw error
+    }
+    return this.currentState()
+  }
+}

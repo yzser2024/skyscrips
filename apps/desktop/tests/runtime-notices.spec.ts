@@ -1,0 +1,233 @@
+/** Actual files keep notice coverage distinct from manifest license declarations. */
+import { createHash } from 'node:crypto'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import * as fs from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, expect, it, vi } from 'vitest'
+import { prepareRuntimeNotices } from '../scripts/runtime-notices.ts'
+import sources from '../../../LICENSES/npm/sources.json' with { type: 'json' }
+
+vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>() }))
+
+const roots: string[] = []
+const nativeOfficeNotices = {
+  'licenses/DeepSeek-Harness-MIT.txt': 'DeepSeek integration notice',
+  'licenses/LibreOffice-MPL-2.0.txt': 'MPL engine notice',
+  'licenses/LibreOffice-third-party.html': '<p>Component notices</p>',
+  'program/NOTICE': 'Engine attribution',
+  'program/license.txt': 'Engine license collection',
+}
+const wasmOfficeNotices = {
+  'licenses/DeepSeek-Harness-MIT.txt': 'DeepSeek integration notice',
+  'licenses/LICENSE': 'WASM engine licenses',
+  'licenses/NOTICE': 'WASM engine attribution',
+}
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+})
+
+function fixture(): string {
+  const root = mkdtempSync(join(tmpdir(), 'dshu-runtime-notices-'))
+  roots.push(root)
+  mkdirSync(join(root, 'node_modules'))
+  return root
+}
+
+function add(root: string, path: string, name: string, version = '1.0.0', files: Record<string, string> = {}): void {
+  const directory = join(root, 'node_modules', path)
+  mkdirSync(directory, { recursive: true })
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name, version, license: 'MIT' }))
+  for (const [file, text] of Object.entries(files)) {
+    mkdirSync(join(directory, file, '..'), { recursive: true })
+    writeFileSync(join(directory, file), text)
+  }
+}
+
+it('inventories scoped and nested packages without treating internal package markers as dependencies', async () => {
+  const root = fixture()
+  add(root, '@scope/parent', '@scope/parent', '1.0.0', { LICENSE: 'owned license', 'dist/package.json': '{"type":"module"}' })
+  add(root, '@scope/parent/node_modules/child', 'child', '2.0.0', { 'README.md': 'Permission is hereby granted\nnotice text' })
+  add(root, 'empty', 'empty', '3.0.0', { LICENSE: '', 'README.md': 'License: MIT' })
+  const packages = await prepareRuntimeNotices(root)
+  expect(packages.map(pkg => [pkg.name, pkg.version, pkg.reviewRequired])).toEqual([
+    ['@scope/parent', '1.0.0', false], ['child', '2.0.0', false], ['empty', '3.0.0', true],
+  ])
+  expect(packages[0]!.notices[0]!.sha256).toBe(createHash('sha256').update('owned license').digest('hex'))
+  const first = readFileSync(join(root, 'third-party-runtime.json'), 'utf8')
+  await prepareRuntimeNotices(root)
+  expect(readFileSync(join(root, 'third-party-runtime.json'), 'utf8')).toBe(first)
+})
+
+it('requires exact aggregate versions and copies pinned supplements over the aggregate', async () => {
+  const root = fixture()
+  add(root, 'rea-agents', 'rea-agents', '6.8.0', { LICENSE: 'REA notice',
+    'licenses/npm-runtime-notices.txt': [
+      '===== covered@1.0.0 =====', 'text', '===== clean-git-ref@2.0.1 =====', 'notice',
+      '===== minimisted@2.0.1 =====', 'upstream gap',
+    ].join('\n') })
+  add(root, 'covered', 'covered')
+  add(root, 'other/node_modules/covered', 'covered', '1.0.1')
+  add(root, 'clean-git-ref', 'clean-git-ref', '2.0.1')
+  add(root, 'minimisted', 'minimisted', '2.0.1')
+  const packages = await prepareRuntimeNotices(root)
+  expect(packages.find(pkg => pkg.name === 'covered' && pkg.version === '1.0.0')).toMatchObject({ reviewRequired: false })
+  expect(packages.find(pkg => pkg.version === '1.0.1')).toMatchObject({ reviewRequired: true, notices: [] })
+  expect(packages.find(pkg => pkg.name === 'clean-git-ref')).toMatchObject({ reviewRequired: false, notices: [
+    {
+      path: 'licenses/clean-git-ref-2.0.1-Apache-2.0.txt',
+      sha256: 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30',
+    },
+    expect.objectContaining({ path: 'node_modules/rea-agents/licenses/npm-runtime-notices.txt' }),
+  ] })
+  expect(packages.find(pkg => pkg.name === 'minimisted')).toMatchObject({ reviewRequired: false, notices: [
+    {
+      path: 'licenses/minimisted-2.0.1-MIT.txt',
+      sha256: 'ad1197090954e1b96c02c66266900198cf27ab60047446435dc159e679f2f4b5',
+    },
+    expect.objectContaining({ path: 'node_modules/rea-agents/licenses/npm-runtime-notices.txt' }),
+  ] })
+})
+
+it.each([
+  { name: '@deepseek-ai/libreoffice-kit-win32-x64', version: '0.1.5', next: '0.1.6', files: nativeOfficeNotices },
+  { name: '@deepseek-ai/libreoffice-kit-win32-x64', version: '0.2.3', next: '0.2.4', files: nativeOfficeNotices },
+  { name: '@deepseek-ai/libreoffice-kit-wasm', version: '0.1.5', next: '0.1.6', files: wasmOfficeNotices },
+  { name: '@deepseek-ai/libreoffice-kit-wasm', version: '0.2.3', next: '0.2.4', files: wasmOfficeNotices },
+])('records $name@$version release texts only for the pinned package and version', async ({ name, version, next, files }) => {
+  const root = fixture()
+  add(root, name, name, version, files)
+  add(root, `next/node_modules/${name}`, name, next, { ...files, LICENSE: 'Package-level notice' })
+  add(root, 'other', 'other', '0.1.5', files)
+  const packages = await prepareRuntimeNotices(root)
+  const engine = packages.find(pkg => pkg.version === version && pkg.name === name)!
+  expect(engine.reviewRequired).toBe(false)
+  expect(engine.notices).toHaveLength(Object.keys(files).length)
+  for (const [path, text] of Object.entries(files)) {
+    expect(engine.notices).toContainEqual({ path: `${engine.path}/${path}`, sha256: createHash('sha256').update(text).digest('hex') })
+  }
+  expect(packages.filter(pkg => pkg.reviewRequired).map(pkg => `${pkg.name}@${pkg.version}`)).toEqual([
+    `${name}@${next}`, 'other@0.1.5',
+  ])
+})
+
+it.each(['0.1.5', '0.2.3'].flatMap(version => [undefined, ' \n'].map(text => ({ version, text }))))(
+  'keeps an incomplete native $version collection review-required despite a root license: $text', async ({ version, text }) => {
+    const root = fixture()
+    const files: Record<string, string> = { ...nativeOfficeNotices, LICENSE: 'Package-level notice' }
+    if (text === undefined) delete files['licenses/LibreOffice-third-party.html']
+    else files['licenses/LibreOffice-third-party.html'] = text
+    add(root, '@deepseek-ai/libreoffice-kit-win32-x64', '@deepseek-ai/libreoffice-kit-win32-x64', version, files)
+    const packages = await prepareRuntimeNotices(root)
+    expect(packages).toEqual([expect.objectContaining({ reviewRequired: true })])
+    expect(packages[0]!.notices).toHaveLength(5)
+  })
+
+it.each([undefined, ' \n'])('keeps incomplete WASM 0.2.3 texts review-required despite a root license: %s', async (text) => {
+  const root = fixture()
+  const files: Record<string, string> = { ...wasmOfficeNotices, LICENSE: 'Package-level notice' }
+  if (text === undefined) delete files['licenses/NOTICE']
+  else files['licenses/NOTICE'] = text
+  add(root, '@deepseek-ai/libreoffice-kit-wasm', '@deepseek-ai/libreoffice-kit-wasm', '0.2.3', files)
+  expect(await prepareRuntimeNotices(root)).toEqual([expect.objectContaining({ reviewRequired: true })])
+})
+
+it('keeps absent and blank native engine texts review-required', async () => {
+  const root = fixture()
+  add(root, '@deepseek-ai/libreoffice-kit-win32-x64', '@deepseek-ai/libreoffice-kit-win32-x64', '0.1.5', {
+    LICENSE: ' \r\n', 'program/NOTICE': '\t\n', 'licenses/LibreOffice-MPL-2.0.txt': '',
+  })
+  expect(await prepareRuntimeNotices(root)).toEqual([expect.objectContaining({ reviewRequired: true, notices: [] })])
+})
+
+it('reports native notice I/O failures before publishing the inventory', async () => {
+  const root = fixture()
+  add(root, '@deepseek-ai/libreoffice-kit-win32-x64', '@deepseek-ai/libreoffice-kit-win32-x64', '0.1.5')
+  mkdirSync(join(root, 'node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/license.txt'), { recursive: true })
+  await expect(prepareRuntimeNotices(root)).rejects.toThrow()
+  expect(() => readFileSync(join(root, 'third-party-runtime.json'))).toThrow()
+})
+
+it('copies every pinned supplement unchanged and leaves other versions for review', async () => {
+  const root = fixture()
+  for (const source of sources) {
+    for (const identity of source.packages) {
+      const split = identity.lastIndexOf('@')
+      const name = identity.slice(0, split)
+      const version = identity.slice(split + 1)
+      add(root, `${version}/node_modules/${name}`, name, version)
+    }
+  }
+  add(root, 'next/node_modules/@cfworker/json-schema', '@cfworker/json-schema', '99.0.0')
+  add(root, 'next/node_modules/clean-git-ref', 'clean-git-ref', '99.0.0')
+  add(root, 'next/node_modules/tr46', 'tr46', '0.0.4')
+  const packages = await prepareRuntimeNotices(root)
+  expect(packages.filter(pkg => pkg.reviewRequired).map(pkg => `${pkg.name}@${pkg.version}`).sort()).toEqual([
+    '@cfworker/json-schema@99.0.0', '@img/sharp-libvips-linux-x64@1.3.4', 'brotli@1.3.3', 'clean-git-ref@99.0.0',
+    'dfa@1.2.0', 'fontkit@2.0.4', 'frida@17.23.2', 'proxy-agent-negotiate@1.1.0',
+    'sherpa-onnx-linux-x64@1.13.8', 'tr46@0.0.4',
+  ])
+  expect(packages.find(pkg => pkg.name === 'brotli')?.notices).toHaveLength(4)
+  expect(packages.find(pkg => pkg.name === 'clean-git-ref' && pkg.version === '2.0.1')?.reviewRequired).toBe(false)
+  for (const source of sources) {
+    expect(createHash('sha256').update(readFileSync(join(root, 'licenses', source.file))).digest('hex')).toBe(source.sha256)
+    for (const identity of source.packages) {
+      expect(packages.find(pkg => `${pkg.name}@${pkg.version}` === identity)?.notices)
+        .toContainEqual({ path: `licenses/${source.file}`, sha256: source.sha256 })
+    }
+  }
+})
+
+it('rejects a changed supplement before publishing the inventory', async () => {
+  const root = fixture()
+  const sourceDirectory = join(root, 'sources')
+  cpSync(join(import.meta.dirname, '../../../LICENSES/npm'), sourceDirectory, { recursive: true })
+  writeFileSync(join(sourceDirectory, 'cfworker-4.1.4-MIT.txt'), 'replaced')
+  add(root, '@cfworker/json-schema', '@cfworker/json-schema', '4.1.4')
+  await expect(prepareRuntimeNotices(root, sourceDirectory)).rejects.toThrow('changed supplement')
+  expect(() => readFileSync(join(root, 'third-party-runtime.json'))).toThrow()
+})
+
+it('writes the verified supplement even if its source is moved after the check', async () => {
+  const root = fixture()
+  const sourceDirectory = join(root, 'sources')
+  const file = 'clean-git-ref-2.0.1-Apache-2.0.txt'
+  const sourcePath = join(sourceDirectory, file)
+  const outputDirectory = join(root, 'licenses')
+  const verifiedBytes = readFileSync(join(import.meta.dirname, '../../../LICENSES/npm', file))
+  mkdirSync(sourceDirectory)
+  writeFileSync(sourcePath, verifiedBytes)
+  add(root, 'clean-git-ref', 'clean-git-ref', '2.0.1')
+
+  const createDirectory = fs.mkdir
+  const moveSource = vi.spyOn(fs, 'mkdir').mockImplementationOnce((path) => {
+    expect(path).toBe(outputDirectory)
+    renameSync(sourcePath, `${sourcePath}.moved`)
+    return createDirectory(outputDirectory, { recursive: true })
+  })
+  try {
+    const packages = await prepareRuntimeNotices(root, sourceDirectory)
+    expect(readFileSync(join(outputDirectory, file))).toEqual(verifiedBytes)
+    expect(packages[0]!.notices).toEqual([{
+      path: `licenses/${file}`,
+      sha256: createHash('sha256').update(verifiedBytes).digest('hex'),
+    }])
+  } finally {
+    moveSource.mockRestore()
+  }
+})
+
+it('does not publish an empty or invalid package inventory', async () => {
+  const root = fixture()
+  await expect(prepareRuntimeNotices(root)).rejects.toThrow('no npm packages')
+  add(root, 'invalid', 'invalid')
+  writeFileSync(join(root, 'node_modules/invalid/package.json'), '{"name":"invalid"}')
+  await expect(prepareRuntimeNotices(root)).rejects.toThrow('invalid package identity')
+})
+
+it('propagates notice access failures instead of treating them as an absent aggregate', async () => {
+  const root = fixture()
+  add(root, 'rea-agents', 'rea-agents')
+  mkdirSync(join(root, 'node_modules/rea-agents/licenses/npm-runtime-notices.txt'), { recursive: true })
+  await expect(prepareRuntimeNotices(root)).rejects.toThrow()
+})

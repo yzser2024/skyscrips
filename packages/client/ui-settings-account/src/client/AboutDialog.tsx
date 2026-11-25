@@ -1,0 +1,138 @@
+/** Build identity and this fork's GitHub release status. */
+import { useEffect, useRef, useState } from 'react'
+import { Button, FishLogo, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { AccountMenuProps } from './AccountMenu.tsx'
+import { GitHubIcon } from './GitHubIcon.tsx'
+import { loadForkRelease, type ReleaseNotice } from './release-status.ts'
+import { publicContactConfig } from './public-config.ts'
+import css from './AboutDialog.module.css'
+
+const REPOSITORY = 'https://github.com/Water-Run/deepseek-harness-uncensored'
+const UPSTREAM_REPOSITORY = 'https://github.com/deepseek-ai/deepseek-harness'
+const PURGE_REPOSITORY = process.env.DSH_CLIENT_PURGE_REPO ?? 'https://github.com/kingcharleslzy-ai/dsh-purge'
+
+function recorded(value: string | undefined, unknown: string): string {
+  return value === undefined || value === '' ? unknown : value
+}
+
+function formatWhen(value: string | undefined, unknown: string, t: AccountMenuProps['t']): string {
+  const text = recorded(value, unknown)
+  const time = Date.parse(text)
+  if (Number.isNaN(time)) return text
+  const date = new Date(time)
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return t('aboutUtcTime', { time: `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}` })
+}
+
+function statusText(notice: ReleaseNotice, t: AccountMenuProps['t']): string {
+  switch (notice.phase) {
+    case 'checking': return t('aboutChecking')
+    case 'latest': return t('aboutLatest')
+    case 'available': return t(notice.severity === 'major' ? 'aboutMajor' : notice.severity === 'minor' ? 'aboutMinor' : 'aboutPatch')
+    case 'unpublished': return t('aboutNoRelease')
+    case 'offline': return t('aboutOffline')
+    case 'failed': return notice.message === 'rate-limited'
+      ? notice.retryAt === undefined ? t('aboutRateLimited') : t('aboutRateLimitedUntil', { time: new Date(notice.retryAt).toLocaleString() })
+      : t(notice.message === 'http-403' ? 'aboutForbidden' : 'aboutFailed')
+    default: {
+      const unreachable: never = notice.phase
+      return unreachable
+    }
+  }
+}
+
+/**
+ * Display build identity and the live GitHub release check.
+ * @param props - Localized labels and dismissal callback.
+ * @returns The about dialog.
+ */
+export function AboutDialog({ t, close, open = true }: { t: AccountMenuProps['t']; close: () => void; open?: boolean }) {
+  const commit = process.env.DSH_CLIENT_SOURCE_COMMIT ?? process.env.DSH_CLIENT_COMMIT_HASH
+  const sourceRevision = commit !== undefined && /^[a-f0-9]{7,40}$/iu.test(commit) ? commit : 'main'
+  const upstreamCommit = process.env.DSH_CLIENT_UPSTREAM_COMMIT
+  const foundation = t('aboutBasedOn', { version: recorded(process.env.DSH_CLIENT_UPSTREAM_VERSION, t('unknownBuild')) })
+  const version = process.env.DSH_CLIENT_FORK_VERSION
+  const reaRepository = process.env.DSH_CLIENT_REA_REPOSITORY
+  const reaCommit = process.env.DSH_CLIENT_REA_COMMIT
+  const [notice, setNotice] = useState<ReleaseNotice>({ phase: 'checking' })
+  const [check, setCheck] = useState(0)
+  const [now, setNow] = useState(Date.now)
+  const retryDeadline = useRef(0)
+  useEffect(() => {
+    if (!open || retryDeadline.current > Date.now()) return
+    const controller = new AbortController()
+    setNotice({ phase: 'checking' })
+    void loadForkRelease(fetch, version ?? '', { signal: controller.signal, timeoutMs: publicContactConfig().releaseCheckTimeoutMs }).then((next) => {
+      if (!controller.signal.aborted) {
+        retryDeadline.current = next.retryAt ?? 0
+        setNotice(next)
+        setNow(Date.now())
+      }
+    })
+    return () => { controller.abort() }
+  }, [version, check, open])
+  useEffect(() => {
+    if (!open || notice.retryAt === undefined || notice.retryAt <= now) return
+    // Browser timers use a signed 32-bit delay; a distant server deadline must not overflow it.
+    const timer = setTimeout(() => { setNow(Date.now()) }, Math.max(0, Math.min(notice.retryAt - Date.now(), 2 ** 31 - 1)))
+    return () => { clearTimeout(timer) }
+  }, [open, notice.retryAt, now])
+  return <Modal open={open} onClose={close} closeLabel={t('close')} title={t('about')} enter="fade" className={css.dialog ?? ''} contentClassName={css.scrollContent ?? ''}>
+    <div className={css.content}>
+      <section className={css.identity} aria-label={t('aboutIdentity')}>
+        <div className={css.brandRow}><div className={css.logo}><FishLogo size={56} /></div>
+          <span className={css.edition}>{t('aboutEdition')}</span></div>
+        <h2 className={css.product}>{t('productName')}</h2>
+        <p className={css.slogan}>{t('aboutSlogan')}</p>
+        <div className={css.author}><span>{t('aboutAuthor')}</span><a href="https://github.com/Water-Run" target="_blank" rel="noreferrer">{t('aboutAuthorName')}</a></div>
+        <dl className={css.build}>
+          <div className={css.versionRow}><dt>{t('forkVersion')}</dt><dd className={css.version}>{recorded(version, t('developmentBuild'))}</dd></div>
+          <div><dt>{t('aboutBuiltOn')}</dt><dd>{formatWhen(process.env.DSH_CLIENT_BUILD_TIME, t('unknownBuild'), t)}</dd></div>
+        </dl>
+        <a className={css.github} href={REPOSITORY} target="_blank" rel="noreferrer"><GitHubIcon />{t('repository')}</a>
+        <div className={css.update}>
+          <p className={css.status} data-phase={notice.phase} role="status"><span className={css.statusDot} aria-hidden="true" />{statusText(notice, t)}{notice.phase === 'available' && notice.version !== undefined ? ` · ${notice.version}` : ''}</p>
+          <Button size="sm" variant="outline" disabled={notice.phase === 'checking' || (notice.retryAt !== undefined && notice.retryAt > now)} onClick={() => { setCheck(value => value + 1) }}>{t('aboutCheck')}</Button>
+          {notice.url !== undefined && <a href={notice.url} target="_blank" rel="noreferrer">{t('aboutReadRelease')}</a>}
+        </div>
+      </section>
+      <section className={css.details} aria-label={t('aboutSectionSource')}>
+        <section className={css.group}>
+          <h3><span className={css.sectionMark} aria-hidden="true" />{t('aboutFoundation')}</h3>
+          <p className={css.foundation}>{upstreamCommit !== undefined && /^[a-f0-9]{40}$/u.test(upstreamCommit)
+            ? <a href={`${UPSTREAM_REPOSITORY}/commit/${upstreamCommit}`} target="_blank" rel="noreferrer">{foundation}</a>
+            : foundation}</p>
+          <a href={`${REPOSITORY}/blob/${sourceRevision}/LICENSE`} target="_blank" rel="noreferrer">{t('licenseName')}</a>
+          <a href={`${REPOSITORY}/blob/${sourceRevision}/THIRD_PARTY_NOTICES.md`} target="_blank" rel="noreferrer">{t('aboutThirdParty')}</a>
+        </section>
+        <section className={css.group}>
+          <h3><span className={css.sectionMark} aria-hidden="true" />{t('aboutSectionSource')}</h3>
+          <dl className={css.metadata}>
+            <dt>{t('buildCommit')}</dt><dd>{sourceRevision === 'main' ? t('unknownBuild') : <a href={`${REPOSITORY}/commit/${sourceRevision}`} target="_blank" rel="noreferrer">{sourceRevision.slice(0, 12)}</a>}{process.env.DSH_CLIENT_GIT_DIRTY === 'true' && <span className={css.modified}>{t('modifiedBuild')}</span>}</dd>
+            <dt>{t('commitDate')}</dt><dd>{formatWhen(process.env.DSH_CLIENT_COMMIT_DATE, t('unknownBuild'), t)}</dd>
+          </dl>
+        </section>
+        <section className={css.group}>
+          <h3><span className={css.sectionMark} aria-hidden="true" />{t('aboutPurge')}</h3>
+          <dl className={css.metadata}>
+            <dt>{t('purgeVersion')}</dt><dd>{recorded(process.env.DSH_CLIENT_PURGE_VERSION, t('unknownBuild'))}</dd>
+            <dt>{t('purgeCommit')}</dt><dd>{process.env.DSH_CLIENT_PURGE_COMMIT === undefined ? t('unknownBuild') : <a href={`${PURGE_REPOSITORY}/commit/${process.env.DSH_CLIENT_PURGE_COMMIT}`} target="_blank" rel="noreferrer">{process.env.DSH_CLIENT_PURGE_COMMIT.slice(0, 12)}</a>}</dd>
+            <dt>{t('purgeDate')}</dt><dd>{formatWhen(process.env.DSH_CLIENT_PURGE_DATE, t('unknownBuild'), t)}</dd>
+          </dl>
+        </section>
+        <section className={css.group}>
+          <h3><span className={css.sectionMark} aria-hidden="true" />{t('aboutRea')}</h3>
+          <div className={css.dependencyHeading}><a href={reaRepository} target="_blank" rel="noreferrer">{t('aboutReaVersion', {
+            version: recorded(process.env.DSH_CLIENT_REA_VERSION, t('unknownBuild')),
+          })}</a>{reaRepository !== undefined && <GitHubIcon />}</div>
+          <dl className={css.metadata}>
+            <dt>{t('buildCommit')}</dt><dd>{reaRepository === undefined || reaCommit === undefined ? t('unknownBuild')
+              : <a href={`${reaRepository}/commit/${reaCommit}`} target="_blank" rel="noreferrer">{reaCommit.slice(0, 12)}</a>}</dd>
+            <dt>{t('commitDate')}</dt><dd>{formatWhen(process.env.DSH_CLIENT_REA_DATE, t('unknownBuild'), t)}</dd>
+          </dl>
+          <p className={css.dependencyNote}>{t('aboutReaEngines')}</p>
+        </section>
+      </section>
+    </div>
+  </Modal>
+}

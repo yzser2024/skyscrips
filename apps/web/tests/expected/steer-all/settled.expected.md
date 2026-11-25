@@ -1,0 +1,44 @@
+- banner:
+  - navigation "Session hierarchy": Use the ask_user_question tool to
+  - 'button "Conversation mode: Default" [disabled]': Default
+  - button "Side question"
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: Use the ask_user_question tool to ask me exactly one question with id "checkpoint", question "Ready to continue?", header "Checkpoint", and options labeled "Yes" and "No". After I answer, reply with one short sentence acknowledging my answer and stop. {{clock}}
+- button "Copy"
+- status: Completed
+- button "Completed in {{duration}}" [disabled]
+- button "Context injection runtime-context"
+- button "Context injection skill-catalog"
+- button "Context injection time-context"
+- button "Think The user wants me to ask them a checkpoint question first, then continue with whatever they interject. Let me do exactly that."
+- button "Ask question 1/1 answered"
+- group "Questions and answers":
+  - term: Checkpoint Ready to continue?
+  - definition: "Yes"
+  - text: {{clock}}
+  - button "Copy"
+- text: "Interjection: include the word BANANA in your final reply. {{clock}}"
+- button "Copy"
+- text: "Interjection: include the word ORANGE in your final reply. {{clock}}"
+- button "Copy"
+- paragraph: "Got it: BANANA and ORANGE."
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Full access"': Full access
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]
+- 'button "Turns: 1 · Steps: 2 · {{throughput}} tok/s"': "Turns: 1 · Steps: {{throughput}} tok/s"
+- button "40 tok · Cache hit 0%": 40 tokCache hit 0%
+- 'button "Conversation cost: ￥0.000200"': ￥0.000200
+- 'button "Spending limits: Off"': "Off"
+- button "0% of context used": 0%

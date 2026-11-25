@@ -1,0 +1,444 @@
+// @vitest-environment jsdom
+import { contextMenuHook } from '@deepseek-ai/dsh-client-test-runtime'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, expect, it, vi } from 'vitest'
+import { allowAllAccess, bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { AgentPresetSection, type AgentPresetSectionProps, type CurrentModeState } from '../src/client/AgentPresetSection.tsx'
+import { ModeSwitchController } from '../src/client/mode-policy-controller.ts'
+import type { AgentPresetSectionState } from '../src/client/section-store.ts'
+import { en } from '../src/client/locales.ts'
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers() })
+const translations: ReadonlyMap<string, string> = new Map(Object.entries(en))
+function unusedHook(): never {
+  throw new Error('This section does not read global slot sources')
+}
+function view(partial: Partial<AgentPresetSectionState> = {}, startCreatorDraft?: () => void, outerClose?: () => void, enabled = true,
+  configurable: readonly string[] = [], current: Partial<CurrentModeState> = {}) {
+  const developerTools = createSnapshotStore(enabled)
+  const configurableModes = createSnapshotStore<readonly string[]>(configurable)
+  const currentMode = createSnapshotStore<CurrentModeState>({ blank: true, busy: false, ...current })
+  const mode = new ModeSwitchController({
+    read: async () => ({ allowExistingSessionSwitch: false }),
+    begin: async () => { throw new Error('not used') }, confirm: async () => { throw new Error('not used') },
+    disable: async () => ({ allowExistingSessionSwitch: false }),
+  }, async () => {}, makeTranslate(en))
+  const store = createSnapshotStore<AgentPresetSectionState>({ status: 'ready', error: null,
+    saving: false, rows: [{ id: 'standard', isDefault: true }, { id: 'mine', name: 'Mine', isDefault: false }],
+    view: null, ...partial })
+  const actions = { load: vi.fn(async () => {}), view: vi.fn(async () => {}), closeView: vi.fn(), makeDefault: vi.fn(async () => {}),
+    close: vi.fn(), selectCurrent: vi.fn(async () => {}), savePolicy: vi.fn(async () => {}), loadPolicy: vi.fn(async () => {}),
+    confirmPolicy: vi.fn(async () => {}), cancelPolicy: vi.fn(), dismissModeToast: vi.fn(), dismissNotice: vi.fn() }
+  const configured: (string | undefined)[] = []
+  const props: AgentPresetSectionProps = { ...actions,
+    ...(startCreatorDraft === undefined ? {} : { startCreatorDraft }),
+    usePanelInfo: unusedHook, useSessions: unusedHook, useSessionStatus: unusedHook, useSessionRetainInfo: unusedHook,
+    useWorkspaces: unusedHook, useResource: unusedHook,
+    // The section's own child slot is empty in this fixture: these specs record
+    // which mode the page asked to configure.
+    renderSlot: ((_name: 'settings.mode.materials', owner: { modeId: string | undefined }) => {
+      configured.push(owner.modeId)
+      return null
+    }) as AgentPresetSectionProps['renderSlot'],
+    ...allowAllAccess,
+    useContextMenu: contextMenuHook(),
+    useAgentPresetSection: bindSnapshotSelector(store),
+    useCurrentMode: bindSnapshotSelector(currentMode), useModePolicy: bindSnapshotSelector(mode.policy),
+    useModeSwitchState: bindSnapshotSelector(mode.state),
+    useDeveloperTools: bindSnapshotSelector(developerTools),
+    useConfigurableModes: bindSnapshotSelector(configurableModes),
+    t: key => translations.get(key) ?? key }
+  render(outerClose === undefined ? <AgentPresetSection {...props} />
+    : <Modal open onClose={outerClose} title="Settings" closeLabel="Close"><AgentPresetSection {...props} /></Modal>)
+  return { ...actions, store, developerTools, currentMode, configurableModes, mode, configured }
+}
+function rowFor(id: string): HTMLElement {
+  const row = document.querySelector<HTMLElement>(`[data-agent-preset-id="${id}"]`)
+  if (row === null) throw new Error(`no card for ${id}`)
+  return row
+}
+it.each([false, true])('offers current-mode choices with Coding Tools %s', (enabled) => {
+  const actions = view({ rows: [
+    { id: 'standard', isDefault: false }, { id: 'ptc', isDefault: false },
+    { id: 'minimal', isDefault: true }, { id: 'cordis', isDefault: false },
+    { id: 'mine', name: 'Mine', isDefault: false },
+  ] }, vi.fn(), undefined, enabled)
+  expect(screen.queryByRole('button', { name: `${en.selectCurrent}: ${en.presetPtcName}` }) !== null).toBe(enabled)
+  expect(screen.queryByRole('button', { name: `${en.selected}: ${en.presetMinimalName}` }) !== null).toBe(enabled)
+  for (const [id, name] of [['standard', en.presetStandardName], ['cordis', en.presetCordisName], ['mine', 'Mine']]) {
+    const button = screen.getByRole<HTMLButtonElement>('button', { name: `${en.selectCurrent}: ${name}` })
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    expect(actions.selectCurrent).toHaveBeenLastCalledWith(id)
+  }
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: en.creatorDraft }).disabled).toBe(false)
+})
+it('updates visible settings choices without writing defaults from the renderer', () => {
+  const actions = view({ rows: [
+    { id: 'standard', isDefault: false }, { id: 'ptc', isDefault: false },
+    { id: 'minimal', isDefault: true }, { id: 'cordis', isDefault: false },
+  ] })
+  const rows = actions.store.getSnapshot().rows
+  act(() => { actions.developerTools.set(false) })
+  expect(document.querySelector('[data-agent-preset-id="ptc"]')).toBeNull()
+  expect(document.querySelector('[data-agent-preset-id="minimal"]')).toBeNull()
+  expect(rowFor('standard')).toBeTruthy()
+  expect(rowFor('cordis')).toBeTruthy()
+  expect(actions.makeDefault).not.toHaveBeenCalled()
+  expect(actions.store.getSnapshot().rows).toBe(rows)
+  act(() => { actions.developerTools.set(true) })
+  expect(screen.getByRole('button', { name: `${en.selected}: ${en.presetMinimalName}` })).toBeTruthy()
+  expect(rowFor('ptc')).toBeTruthy()
+})
+it.each(['ptc', 'minimal'])('keeps a named custom %s override selectable with Coding Tools off', (id) => {
+  const actions = view({ rows: [{ id, name: 'My mode', isDefault: false }] }, undefined, undefined, false)
+  fireEvent.click(screen.getByRole('button', { name: `${en.selectCurrent}: My mode` }))
+  expect(actions.selectCurrent).toHaveBeenCalledWith(id)
+})
+it('selects the current mode without exposing a default editor', async () => {
+  const actions = view()
+  // The sensitive-action preference moved to the General section; the Modes
+  // page keeps only the existing-conversation permission.
+  expect(screen.getAllByRole('switch')).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: `${en.selectCurrent}: Mine` }))
+  expect(actions.selectCurrent).toHaveBeenCalledWith('mine')
+  expect(actions.makeDefault).not.toHaveBeenCalled()
+  expect(screen.queryByRole('button', { name: new RegExp(en.setDefault) })).toBeNull()
+  await waitFor(() =>{  expect(actions.load).toHaveBeenCalledOnce() })
+  expect(screen.queryByRole('button', { name: /^Edit plugins/ })).toBeNull()
+})
+it('replaces the default preset group tag with its new-task default status', () => {
+  view()
+  const standard = rowFor('standard')
+  expect(within(standard).queryByText(en.builtInGroup)).toBeNull()
+  expect(within(standard).getByText(en.inUse)).toBeTruthy()
+  expect(within(standard).getByRole<HTMLButtonElement>('button', { name: `${en.selected}: ${en.presetStandardName}` }).disabled).toBe(true)
+  expect(within(rowFor('mine')).getByText(en.customGroup)).toBeTruthy()
+})
+it('omits an empty group instead of leaving a heading behind', () => {
+  view({ rows: [{ id: 'standard', isDefault: true }] })
+  expect(screen.getByText(en.presetStandardName)).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: en.customGroup })).toBeNull()
+})
+it('keeps the custom group and its Creator entry while the roster has none', () => {
+  view({ rows: [{ id: 'cordis', isDefault: true }] }, vi.fn())
+  const group = screen.getByRole('heading', { name: en.customGroup }).closest('section')
+  expect(group).not.toBeNull()
+  expect(within(group!).queryByRole('list')).toBeNull()
+  expect(within(group!).getByRole('button', { name: en.creatorDraft })).toBeTruthy()
+})
+it('launches a Creator-mode task from the entry and closes the settings dialog', () => {
+  const launch = vi.fn()
+  const actions = view({ rows: [{ id: 'cordis', isDefault: true }] }, launch)
+  fireEvent.click(screen.getByRole('button', { name: en.creatorDraft }))
+  expect(launch).toHaveBeenCalledOnce()
+  expect(actions.close).toHaveBeenCalledOnce()
+})
+it('offers no Creator entry without the conversation flow or the cordis preset', () => {
+  view({ rows: [{ id: 'cordis', isDefault: true }] })
+  expect(screen.queryByRole('button', { name: en.creatorDraft })).toBeNull()
+  cleanup()
+  view({}, vi.fn())
+  expect(screen.queryByRole('button', { name: en.creatorDraft })).toBeNull()
+})
+it('disables the Creator entry while a default is being saved', () => {
+  const launch = vi.fn()
+  view({ saving: true, rows: [{ id: 'cordis', isDefault: true }] }, launch)
+  const button = screen.getByRole<HTMLButtonElement>('button', { name: en.creatorDraft })
+  expect(button.disabled).toBe(true)
+  fireEvent.click(button)
+  expect(launch).not.toHaveBeenCalled()
+})
+it('reads a declared composition read-only from every card, broken ones included', () => {
+  const actions = view({ rows: [{ id: 'standard', isDefault: true }, { id: 'broken', isDefault: false, broken: 'Missing plugin' }] })
+  expect(screen.queryByRole('dialog')).toBeNull()
+  fireEvent.click(within(rowFor('standard')).getByRole('button', { name: `${en.view}: ${en.presetStandardName}` }))
+  expect(actions.view).toHaveBeenCalledWith('standard')
+  fireEvent.click(within(rowFor('broken')).getByRole('button', { name: `${en.view}: broken` }))
+  expect(actions.view).toHaveBeenLastCalledWith('broken')
+  expect(actions.makeDefault).not.toHaveBeenCalled()
+})
+it('shows the open composition under the preset display name, without copy, and closes it from the footer', () => {
+  const actions = view({ view: { id: 'standard', title: 'standard', content: '- id: tool-fs\n  name: fs\n' } })
+  const dialog = screen.getByRole('dialog', { name: `${en.view} · ${en.presetStandardName}` })
+  expect(dialog.querySelector('pre')?.textContent).toBe('- id: tool-fs\n  name: fs\n')
+  expect(within(dialog).queryByRole('textbox')).toBeNull()
+  expect(dialog.querySelectorAll('p')).toHaveLength(0)
+  fireEvent.click(within(dialog).getAllByRole('button', { name: en.close }).at(-1)!)
+  expect(actions.closeView).toHaveBeenCalledOnce()
+  cleanup()
+  view({ view: { id: 'gone', title: 'Gone', content: '[]\n' } })
+  expect(screen.getByRole('dialog', { name: `${en.view} · Gone` })).toBeTruthy()
+})
+it('keeps Escape inside the composition viewer when Settings is also open', () => {
+  const closeSettings = vi.fn()
+  const actions = view({}, undefined, closeSettings)
+  const trigger = within(rowFor('standard')).getByRole('button', { name: `${en.view}: ${en.presetStandardName}` })
+  trigger.focus()
+  fireEvent.click(trigger)
+  act(() => { actions.store.set({ ...actions.store.getSnapshot(), view: { id: 'standard', title: 'standard', content: '[]\n' } }) })
+  const dialog = screen.getByRole('dialog', { name: `${en.view} · ${en.presetStandardName}` })
+  const [header, footer] = within(dialog).getAllByRole('button', { name: en.close })
+  expect(document.activeElement).toBe(footer)
+  fireEvent.keyDown(footer!, { key: 'Tab' })
+  expect(document.activeElement).toBe(header)
+  fireEvent.keyDown(header!, { key: 'Tab', shiftKey: true })
+  expect(document.activeElement).toBe(footer)
+  fireEvent.keyDown(footer!, { key: 'Escape' })
+  expect(actions.closeView).toHaveBeenCalledOnce()
+  expect(closeSettings).not.toHaveBeenCalled()
+  expect(actions.close).not.toHaveBeenCalled()
+  expect(document.activeElement).toBe(trigger)
+})
+it('clears an open viewer when the settings section unmounts', () => {
+  const actions = view({ view: { id: 'standard', title: 'standard', content: '[]\n' } })
+  cleanup()
+  expect(actions.closeView).toHaveBeenCalledOnce()
+})
+it('shows roster errors without hiding the roster', () => {
+  const actions = view({ error: 'Roster stale', rows: [
+    { id: 'broken', isDefault: false, broken: 'Missing plugin' },
+    { id: 'mine', name: 'Mine', isDefault: false },
+  ] })
+  expect(screen.getAllByRole('alert').map(node => node.textContent)).toEqual(['Roster stale', 'Missing plugin'])
+  fireEvent.click(screen.getByRole('button', { name: `${en.selectCurrent}: Mine` }))
+  expect(actions.selectCurrent).toHaveBeenCalledWith('mine')
+})
+it('keeps a broken card focusable for diagnostics and refuses to select it', () => {
+  const actions = view({ rows: [{ id: 'broken', isDefault: false, broken: 'Missing plugin' }] })
+  const card = screen.getByRole<HTMLButtonElement>('button', { name: 'Failed to load: broken' })
+  expect(card.disabled).toBe(false)
+  expect(card.getAttribute('aria-disabled')).toBe('true')
+  fireEvent.click(card)
+  expect(actions.makeDefault).not.toHaveBeenCalled()
+})
+it.each([
+  ['standard', en.presetStandardName, 'How it works', 'Fix a bug'],
+  ['security', en.presetSecurityName, 'What this mode adds', 'Review an application'],
+  ['reverse', en.presetReverseName, 'Analysis workflow', 'Analyze a program'],
+  ['writing', en.presetWritingName, 'Writing workflow', 'Continue a scene'],
+  ['ptc', en.presetPtcName, 'How tools are called', 'Check a set of configuration files'],
+  ['minimal', en.presetMinimalName, 'What is included', 'Compare performance on a small bug fix'],
+  ['cordis', en.presetCordisName, 'What you can create', 'Add a UI'],
+])('opens both help sections for %s without changing the default', (id, name, heading, exampleTitle) => {
+  const actions = view({ rows: [{ id, isDefault: false }] })
+  const trigger = within(rowFor(id)).getByRole('button', { name: `${en.modeExplanation}: ${name}` })
+  trigger.focus()
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole('dialog', { name })
+  expect(within(dialog).getByRole('heading', { name: heading })).toBeTruthy()
+  const usage = within(dialog).getByRole('tab', { name: en.howToUse })
+  fireEvent.click(usage)
+  expect(usage.getAttribute('aria-selected')).toBe('true')
+  expect(within(dialog).getByRole('heading', { name: exampleTitle })).toBeTruthy()
+  expect(within(dialog).getAllByText(en.guideExampleTask).length).toBeGreaterThan(0)
+  fireEvent.click(within(dialog).getByRole('tab', { name: en.modeExplanation }))
+  expect(within(dialog).getByRole('heading', { name: heading })).toBeTruthy()
+  fireEvent.click(within(dialog).getByRole('button', { name: en.close }))
+  expect(document.activeElement).toBe(trigger)
+  expect(actions.makeDefault).not.toHaveBeenCalled()
+})
+it('opens one reader for both help pages', () => {
+  const actions = view({ rows: [{ id: 'standard', isDefault: false }] })
+  const trigger = within(rowFor('standard')).getByRole('button', { name: `${en.modeExplanation}: ${en.presetStandardName}` })
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole('dialog', { name: en.presetStandardName })
+  expect(within(dialog).getByRole('tab', { name: en.modeExplanation }).getAttribute('aria-selected')).toBe('true')
+  expect(within(dialog).getByRole('tab', { name: en.howToUse }).getAttribute('aria-selected')).toBe('false')
+  expect(actions.makeDefault).not.toHaveBeenCalled()
+})
+it('keeps keyboard focus in help and dismisses only the reader on Escape', () => {
+  const closeSettings = vi.fn()
+  const actions = view({}, undefined, closeSettings)
+  const trigger = within(rowFor('standard')).getByRole('button', { name: `${en.modeExplanation}: ${en.presetStandardName}` })
+  trigger.focus()
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole('dialog', { name: en.presetStandardName })
+  const details = within(dialog).getByRole('tab', { name: en.modeExplanation })
+  const panel = within(dialog).getByRole('tabpanel', { name: en.modeExplanation })
+  const close = within(dialog).getByRole('button', { name: en.close })
+  expect(document.activeElement).toBe(details)
+  expect(fireEvent.keyDown(details, { key: 'Tab' })).toBe(true)
+  panel.focus()
+  fireEvent.keyDown(panel, { key: 'Tab' })
+  expect(document.activeElement).toBe(close)
+  fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
+  expect(document.activeElement).toBe(panel)
+  fireEvent.keyDown(panel, { key: 'Escape' })
+  expect(screen.queryByRole('dialog', { name: en.presetStandardName })).toBeNull()
+  expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy()
+  expect(document.activeElement).toBe(trigger)
+  expect(closeSettings).not.toHaveBeenCalled()
+  expect(actions.close).not.toHaveBeenCalled()
+})
+it('connects keyboard selection to the visible guide panel', () => {
+  view()
+  fireEvent.click(within(rowFor('standard')).getByRole('button', { name: `${en.modeExplanation}: ${en.presetStandardName}` }))
+  const dialog = screen.getByRole('dialog')
+  const details = within(dialog).getByRole('tab', { name: en.modeExplanation })
+  const usage = within(dialog).getByRole('tab', { name: en.howToUse })
+  expect(details.tabIndex).toBe(0)
+  expect(usage.tabIndex).toBe(-1)
+  fireEvent.keyDown(details, { key: 'ArrowRight' })
+  const panel = within(dialog).getByRole('tabpanel', { name: en.howToUse })
+  expect(panel.id).toBe(usage.getAttribute('aria-controls'))
+  expect(document.activeElement).toBe(usage)
+  expect(usage.getAttribute('aria-selected')).toBe('true')
+  expect(details.tabIndex).toBe(-1)
+  expect(usage.tabIndex).toBe(0)
+  expect(within(dialog).queryByRole('tabpanel', { name: en.modeExplanation })).toBeNull()
+})
+it('does not attach built-in claims to named or unknown presets', () => {
+  view({ rows: [{ id: 'ptc', name: 'My PTC', isDefault: false }, { id: 'third-party', isDefault: false }] })
+  expect(screen.queryByRole('button', { name: new RegExp(en.modeExplanation) })).toBeNull()
+  expect(screen.queryByRole('button', { name: new RegExp(en.howToUse) })).toBeNull()
+})
+it('leaves help usable while a default is being saved', () => {
+  const actions = view({ saving: true })
+  fireEvent.click(within(rowFor('standard')).getByRole('button', { name: `${en.modeExplanation}: ${en.presetStandardName}` }))
+  expect(screen.getByRole('dialog', { name: en.presetStandardName })).toBeTruthy()
+  expect(actions.makeDefault).not.toHaveBeenCalled()
+})
+it('closes help even when the browser reports no previously focused element', () => {
+  const descriptor: TypedPropertyDescriptor<Element | null> = Object.getOwnPropertyDescriptor(Document.prototype, 'activeElement')!
+  const readActiveElement = descriptor.get!.bind(document)
+  // Only the initial unfocused body is absent; modal controls must observe subsequent focus.
+  const activeElement = vi.spyOn(document, 'activeElement', 'get').mockImplementation(() => {
+    const focused = readActiveElement()
+    return focused === document.body ? null : focused
+  })
+  try {
+    view()
+    fireEvent.click(within(rowFor('standard')).getByRole('button', { name: `${en.modeExplanation}: ${en.presetStandardName}` }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: en.close }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  } finally {
+    activeElement.mockRestore()
+  }
+})
+it.each([false, true])('only offers a description tooltip when the card clips it: %s', (overflow) => {
+  vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(overflow ? 400 : 80)
+  vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(80)
+  const disconnect = vi.spyOn(ResizeObserver.prototype, 'disconnect')
+  vi.useFakeTimers()
+  view({ rows: [{ id: 'mine', isDefault: false, description: 'Preset description' }] })
+  fireEvent.pointerEnter(screen.getByText('Preset description'))
+  act(() => { vi.advanceTimersByTime(400) })
+  expect(screen.queryByRole('tooltip')?.textContent ?? null).toBe(overflow ? 'Preset description' : null)
+  cleanup()
+  expect(disconnect).toHaveBeenCalledTimes(overflow ? 2 : 1)
+})
+it('renders descriptions and allows selection without resize observation', () => {
+  vi.stubGlobal('ResizeObserver', undefined)
+  const actions = view({ rows: [{ id: 'mine', name: 'Mine', isDefault: false, description: 'Preset description' }] })
+  expect(screen.getByText('Preset description')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: `${en.selectCurrent}: Mine` }))
+  expect(actions.selectCurrent).toHaveBeenCalledWith('mine')
+})
+
+const CONFIGURABLE = [
+  ['standard', false], ['security', false], ['reverse', false],
+] as const
+
+function configurableRows() {
+  return CONFIGURABLE.map(([id, isDefault]) => ({ id, isDefault }))
+}
+
+it('configures a mode through its selector without making it the current mode', () => {
+  const actions = view({ rows: configurableRows() }, undefined, undefined, true, ['security', 'reverse'])
+  // Default mode has no configuration; the page opens on the first mode that does.
+  expect(actions.configured.at(-1)).toBe('security')
+  expect(screen.queryByRole('tab')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: en.modeConfigTabs }))
+  fireEvent.click(screen.getByRole('menuitem', { name: en.presetReverseName }))
+  expect(actions.configured.at(-1)).toBe('reverse')
+  expect(actions.selectCurrent).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: en.modeConfigTabs }).textContent).toContain(en.presetReverseName)
+})
+
+it('opens a mode configuration from its card without selecting that mode', () => {
+  const actions = view({ rows: configurableRows() }, undefined, undefined, true, ['security', 'reverse'])
+  fireEvent.click(within(rowFor('reverse')).getByRole('button', { name: en.configure }))
+  expect(actions.configured.at(-1)).toBe('reverse')
+  expect(actions.selectCurrent).not.toHaveBeenCalled()
+})
+
+it('reveals the selected conversation mode configuration after an explicit switch', () => {
+  const actions = view({ rows: configurableRows() }, undefined, undefined, true, ['security', 'reverse'])
+  fireEvent.click(screen.getByRole('button', { name: en.modeConfigTabs }))
+  fireEvent.click(screen.getByRole('menuitem', { name: en.presetReverseName }))
+  fireEvent.click(screen.getByRole('button', { name: `${en.selectCurrent}: ${en.presetSecurityName}` }))
+  expect(actions.selectCurrent).toHaveBeenCalledWith('security')
+  expect(actions.configured.at(-1)).toBe('security')
+})
+
+it('names the configured mode in place of a tab strip when only one mode has configuration', () => {
+  const actions = view({ rows: configurableRows() }, undefined, undefined, true, ['security'])
+  expect(screen.queryByRole('tablist')).toBeNull()
+  const region = screen.getByRole('region', { name: en.presetSecurityName })
+  expect(region).toBeTruthy()
+  expect(actions.configured.at(-1)).toBe('security')
+})
+
+it('hides the configuration area when no mode publishes any', () => {
+  view({ rows: configurableRows() }, undefined, undefined, true, [])
+  expect(screen.queryByRole('heading', { name: en.modeConfig })).toBeNull()
+  expect(screen.queryByRole('tablist')).toBeNull()
+})
+
+it('opens the configuration on the mode the conversation already runs', () => {
+  const actions = view({ rows: configurableRows() }, undefined, undefined, true, ['security', 'reverse'], { id: 'reverse', blank: false })
+  expect(actions.configured.at(-1)).toBe('reverse')
+  expect(screen.getByRole('button', { name: en.modeConfigTabs }).textContent).toContain(en.presetReverseName)
+})
+
+it('explains why an established conversation keeps its mode until switching is allowed', async () => {
+  const actions = view({}, undefined, undefined, true, [], { sessionId: 's1', blank: false })
+  expect(screen.getByText(en['modeSwitch.locked'])).toBeTruthy()
+  // Reading the permission is not enough; only an accepted permission clears it.
+  await act(async () => { await actions.mode.load() })
+  expect(screen.getByText(en['modeSwitch.locked'])).toBeTruthy()
+  act(() => { actions.mode.accept({ allowExistingSessionSwitch: true }) })
+  expect(screen.queryByText(en['modeSwitch.locked'])).toBeNull()
+})
+
+it('keeps a new conversation free of the lock notice', () => {
+  view({}, undefined, undefined, true, [], { blank: true })
+  expect(screen.queryByText(en['modeSwitch.locked'])).toBeNull()
+})
+
+it('reports a refused switch in place instead of over the dialog', () => {
+  const actions = view({ rows: [{ id: 'standard', isDefault: true }, { id: 'reverse', isDefault: false }] },
+    undefined, undefined, true, [], { sessionId: 's1', blank: false })
+  act(() => { actions.mode.refuse('locked') })
+  const notice = screen.getByRole('alert')
+  expect(notice.textContent).toBe(en['modeSwitch.blocked'])
+  // The refusal names what happened, so it takes the place of the standing lock note.
+  expect(screen.queryByText(en['modeSwitch.locked'])).toBeNull()
+  // The notice belongs to the page: it leaves with it.
+  cleanup()
+  expect(actions.dismissNotice).toHaveBeenCalled()
+})
+
+it('asks the owner instead of failing silently when an established conversation cannot switch', () => {
+  const actions = view({ rows: [{ id: 'standard', isDefault: true }, { id: 'reverse', isDefault: false }] },
+    undefined, undefined, true, [], { sessionId: 's1', blank: false })
+  const card = screen.getByRole<HTMLButtonElement>('button', { name: `${en.selectCurrent}: ${en.presetReverseName}` })
+  // Focusable and clickable, so the refusal reaches the person as a notice.
+  expect(card.disabled).toBe(false)
+  expect(card.getAttribute('aria-disabled')).toBe('true')
+  expect(card.title).toBe(en['modeSwitch.blocked'])
+  fireEvent.click(card)
+  expect(actions.selectCurrent).toHaveBeenCalledExactlyOnceWith('reverse')
+})
+
+it('lets a new conversation select an enabled card without the lock notice', () => {
+  const actions = view({ rows: [{ id: 'standard', isDefault: true }, { id: 'reverse', isDefault: false }] },
+    undefined, undefined, true, [], { blank: true })
+  const card = screen.getByRole<HTMLButtonElement>('button', { name: `${en.selectCurrent}: ${en.presetReverseName}` })
+  expect(card.getAttribute('aria-disabled')).toBe('false')
+  expect(card.title).toBe(en.selectCurrent)
+  fireEvent.click(card)
+  expect(actions.selectCurrent).toHaveBeenCalledExactlyOnceWith('reverse')
+})

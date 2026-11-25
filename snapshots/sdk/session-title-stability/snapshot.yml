@@ -1,0 +1,16 @@
+version: 1
+scenario: session-title-stability
+profile: sdk
+permission: danger-full-access
+composition: session-title-stability
+recording: authored
+header:
+  class: session-title-stability
+  pin: true
+  systemPromptSource: session/text-turn
+  toolSchemasSource: session/text-turn
+replay:
+  override: true
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

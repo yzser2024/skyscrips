@@ -1,0 +1,13 @@
+version: 1
+scenario: subagent-tool-filter
+profile: headless
+composition: subagent-tool-filter
+recording: authored
+header:
+  class: subagent-tool-filter
+  pin: true
+  childSystemPrompts: [1]
+  childToolSchemas: [1]
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

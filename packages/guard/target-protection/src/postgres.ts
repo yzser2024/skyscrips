@@ -1,0 +1,374 @@
+/** Pinned TLS PostgreSQL audits and bounded test-database writes. @module */
+import { Context, Service } from '@deepseek-ai/cordis'
+import schema from '@deepseek-ai/schemastery'
+import pg from 'pg'
+import { Socket, isIP } from 'node:net'
+import { checkServerIdentity, createSecureContext } from 'node:tls'
+import { z } from 'zod'
+import { credentialRef, isCredentialRefName } from '@deepseek-ai/dsh-credentials'
+import type CredentialProvider from '@deepseek-ai/dsh-credentials'
+import { HarnessError } from '@deepseek-ai/dsh-llm'
+import { deadline } from '@deepseek-ai/dsh-timeout'
+import type TargetProtection from './index.ts'
+import type { TargetConnectionResolution } from './index.ts'
+import { canonicalTargetHost, expandTargetRules, hasExactTestServer } from './rules.ts'
+import { databaseResourceId, projectDatabaseResources, type DatabaseResourceBinding } from './database-resources.ts'
+import { TARGET_REFUSAL_REASONS } from './network-decision.ts'
+import { postgresWrite, postgresWriteInput, postgresWriteTables, type PostgresWriteResult } from './postgres-write.ts'
+
+/** Owner-configured direct PostgreSQL endpoint; auth values are resolved per operation. */
+export interface PostgresBinding {
+  name: string
+  hostname: string
+  port?: number
+  database: string
+  username: string
+  passwordRef: string
+  caPem?: string
+  /** Optional central server or database UUIDs associated with this configured endpoint. */
+  resourceIds?: string[]
+  /** Enable one-statement SQL for an owner-isolated test server and database. */
+  testSql?: boolean
+  /** Opt in to structured writes on these test tables without marking the entire server as test. */
+  sharedTestTables?: { schema: string; table: string }[]
+}
+/** Request and response limits for the configured database bindings. */
+export interface Config {
+  databases: PostgresBinding[]
+  timeoutMs?: number
+  maxRows?: number
+  maxResultBytes?: number
+  maxPending?: number
+  maxSqlBytes?: number
+}
+/** Returned metadata contains no connection strings, passwords or credential references. */
+export interface PostgresAudit {
+  database: string
+  username: string
+  serverVersion: string
+  tables: { schema: string; name: string; kind: string; rowSecurity: boolean }[]
+  settings: { name: string; value: string; unit: string | null }[]
+}
+
+/** Committed SQL result with text cells and driver-reported command metadata. */
+export interface PostgresTestResult {
+  columns: string[]
+  rows: (string | null)[][]
+  command: string
+  rowCount: number | null
+}
+
+type SqlParameter = string | number | null | string[]
+type SqlRow = (string | null)[]
+type RunQuery = (text: string, values?: SqlParameter[], extended?: true) => Promise<PostgresTestResult>
+type Access = { kind: 'audit' } | { kind: 'dedicated' } | { kind: 'shared'; schema: string; table: string }
+const testParameters = z.array(z.union([z.string(), z.number(), z.null()])).max(65_535)
+const testStatement = /^(?:SELECT|WITH|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|EXPLAIN|ANALYZE|COMMENT)\b/iu
+
+declare module '@deepseek-ai/cordis' {
+  interface Context { /** Explicit PostgreSQL bindings with mandatory endpoint admission. */ postgresAudit: PostgresAuditService }
+}
+
+const configSchema = z.object({
+  databases: z.array(z.object({ name: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u), hostname: z.string().min(1),
+    port: z.number().int().min(1).max(65535).default(5432), database: z.string().min(1).max(128).refine(value => !value.includes('\0')),
+    username: z.string().min(1).max(128).refine(value => !value.includes('\0')), passwordRef: z.string(), caPem: z.string().max(131072).optional(),
+    resourceIds: z.array(databaseResourceId).default([]), testSql: z.boolean().default(false),
+    sharedTestTables: postgresWriteTables.default([]),
+  }).strict()).min(1),
+  timeoutMs: z.number().int().min(1).max(300000).default(30000), maxRows: z.number().int().min(1).max(10000).default(1000),
+  maxResultBytes: z.number().int().min(256).max(16777216).default(1048576), maxPending: z.number().int().min(1).max(64).default(4),
+  maxSqlBytes: z.number().int().min(1).max(1048576).default(65536),
+}).strict()
+
+/** Optional database provider with fixed SQL, mandatory TLS, name verification and revocation. */
+export default class PostgresAuditService extends Service {
+  static inject = ['targetProtection', 'credentials']
+  static Config: schema<Config> = schema.object({
+    databases: schema.array(schema.object({ name: schema.string().required(), hostname: schema.string().required(),
+      port: schema.natural().default(5432), database: schema.string().required(), username: schema.string().required(),
+      passwordRef: schema.string().required(), caPem: schema.string(), resourceIds: schema.array(schema.string()).default([]),
+      testSql: schema.boolean().default(false),
+      sharedTestTables: schema.array(schema.object({ schema: schema.string().required(), table: schema.string().required() })).default([]),
+    })).required(),
+    timeoutMs: schema.natural().default(30000), maxRows: schema.natural().default(1000),
+    maxResultBytes: schema.natural().default(1048576), maxPending: schema.natural().default(4),
+    maxSqlBytes: schema.natural().default(65536),
+  })
+  private readonly config: z.output<typeof configSchema>
+  private readonly protection: TargetProtection
+  private readonly credentials: CredentialProvider
+  private readonly lifetime = new AbortController()
+  private readonly pending = new Set<Promise<unknown>>()
+  private readonly databaseResources: readonly DatabaseResourceBinding[]
+
+  /** @param ctx - Mandatory rule and credential providers. @param config - Explicit endpoint bindings and limits. */
+  constructor(ctx: Context, config: Config) {
+    super(ctx, 'postgresAudit')
+    this.config = configSchema.parse(config)
+    const names = new Set<string>()
+    for (const binding of this.config.databases) {
+      if (names.has(binding.name)) throw new Error('PostgreSQL binding names must be unique.')
+      names.add(binding.name); binding.hostname = canonicalTargetHost(binding.hostname)
+      if (!isCredentialRefName(binding.passwordRef)) throw new HarnessError('PostgreSQL requires a credential reference name.', 'POSTGRES_CREDENTIAL_UNAVAILABLE')
+      createSecureContext(binding.caPem === undefined ? {} : { ca: binding.caPem })
+    }
+    this.protection = ctx.targetProtection; this.credentials = ctx.credentials
+    this.databaseResources = this.config.databases.flatMap(binding => binding.resourceIds.map(ruleId => ({
+      ruleId, hostname: binding.hostname, port: binding.port, database: binding.database,
+    })))
+    ctx.effect(() => async () => {
+      this.lifetime.abort(new HarnessError('PostgreSQL provider is closing.', 'POSTGRES_UNAVAILABLE'))
+      await Promise.allSettled(this.pending)
+    }, 'target-postgres.lifetime')
+  }
+
+  /** Validate configured resource references before publishing the provider. */
+  async [Service.init](): Promise<void> {
+    if (this.databaseResources.length > 0) projectDatabaseResources(await this.protection.snapshot(), this.databaseResources)
+  }
+
+  /**
+   * Return owner binding names.
+   * @returns Names without endpoint or credential details.
+   */
+  names(): string[] { return this.config.databases.map(binding => binding.name) }
+
+  /**
+   * List configured test bindings for tool registration. Target rules are checked at dispatch.
+   * @returns Names whose owners opted into test SQL.
+   */
+  testSqlNames(): string[] { return this.config.databases.filter(binding => binding.testSql).map(binding => binding.name) }
+
+  /**
+   * List configured shared test bindings for tool registration.
+   * @returns Names whose owners enabled structured writes for specific test tables.
+   */
+  sharedWriteNames(): string[] {
+    return this.config.databases.filter(binding => binding.sharedTestTables.length > 0).map(binding => binding.name)
+  }
+
+  /**
+   * Inspect the selected database using only fixed built-in catalogue queries.
+   * @param name - Owner-configured binding name, never a connection string.
+   * @param signal - Caller cancellation and deadline.
+   * @returns Verified identity, table metadata and selected security settings; no arbitrary SQL is accepted.
+   */
+  inspect(name: string, signal: AbortSignal): Promise<PostgresAudit> {
+    return this.enqueue(signal, scoped => this.run(name, scoped, { kind: 'audit' }, async (query, identity) => {
+      const { rows: tableRows } = await query("SELECT n.nspname::text,c.relname::text,c.relkind::text,c.relrowsecurity::text FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','f') ORDER BY n.nspname,c.relname LIMIT $1", [this.config.maxRows + 1])
+      const { rows: settingRows } = await query('SELECT name,setting,unit FROM pg_catalog.pg_settings WHERE name=ANY($1::text[]) ORDER BY name',
+        [['ssl', 'password_encryption', 'default_transaction_read_only', 'log_connections', 'log_statement', 'search_path']])
+      const tables = z.array(z.tuple([z.string(), z.string(), z.string(), z.enum(['true', 'false'])])).parse(tableRows)
+        .map(([schema, name, kind, rowSecurity]) => ({ schema, name, kind, rowSecurity: rowSecurity === 'true' }))
+      const settings = z.array(z.tuple([z.string(), z.string(), z.string().nullable()])).parse(settingRows)
+        .map(([name, value, unit]) => ({ name, value, unit }))
+      return { database: identity[0], username: identity[1], serverVersion: identity[2], tables, settings }
+    }))
+  }
+
+  /**
+   * Execute and commit one statement against an owner-isolated test database.
+   * @param name - Configured test binding.
+   * @param sql - One statement, with optional $1-style placeholders.
+   * @param parameters - JSON values passed separately to the PostgreSQL driver.
+   * @param signal - Cancellation and deadline.
+   * @returns A result after PostgreSQL confirms the commit. A lost commit acknowledgement is reported separately.
+   */
+  async executeTestSql(name: string, sql: string, parameters: unknown, signal: AbortSignal): Promise<PostgresTestResult> {
+    const values = testParameters.safeParse(parameters)
+    if (!values.success || sql.includes('\0') || Buffer.byteLength(sql) > this.config.maxSqlBytes
+      || Buffer.byteLength(JSON.stringify(values.data)) > this.config.maxSqlBytes || !testStatement.test(sql.trimStart())) {
+      throw new HarnessError('Use one supported PostgreSQL statement with bounded JSON parameters.', 'POSTGRES_INVALID_SQL')
+    }
+    return this.enqueue(signal, scoped => this.run(name, scoped, { kind: 'dedicated' }, query => query(sql, values.data, true)))
+  }
+
+  /**
+   * Apply one bounded mutation to an explicitly allowed table in an exact test database.
+   * @param name - Configured PostgreSQL binding name.
+   * @param input - Schema and structured mutation from the tool request.
+   * @param signal - Caller cancellation and deadline.
+   * @returns Affected rows after PostgreSQL acknowledges the commit.
+   */
+  async writeSharedTest(name: string, input: unknown, signal: AbortSignal): Promise<PostgresWriteResult> {
+    const parsed = postgresWriteInput.safeParse(input)
+    if (!parsed.success || Buffer.byteLength(JSON.stringify(parsed.data)) > this.config.maxSqlBytes) {
+      throw new HarnessError('Use a bounded PostgreSQL test mutation with a schema, table and scalar fields.', 'POSTGRES_INVALID_WRITE')
+    }
+    const { schema, mutation } = parsed.data
+    return this.enqueue(signal, scoped => this.run(name, scoped, { kind: 'shared', schema, table: mutation.table },
+      query => postgresWrite(query, parsed.data, this.config.maxRows)))
+  }
+
+  private async enqueue<T>(signal: AbortSignal, start: (scoped: AbortSignal) => Promise<T>): Promise<T> {
+    if (this.pending.size >= this.config.maxPending) throw new HarnessError('PostgreSQL operation capacity is full.', 'POSTGRES_BUSY')
+    const sessionId = this.protection.currentAuditSessionId()
+    const operation = sessionId === null ? start(signal)
+      : this.protection.bindAuditSession(sessionId)(lifetime => start(AbortSignal.any([signal, lifetime])))
+    this.pending.add(operation)
+    try { return await operation }
+    finally { this.pending.delete(operation) }
+  }
+
+  private async run<T>(
+    name: string, caller: AbortSignal, access: Access,
+    operation: (query: RunQuery, identity: [string, string, string, string]) => Promise<T>,
+  ): Promise<T> {
+    const binding = this.config.databases.find(binding => binding.name === name)
+    if (binding === undefined) throw new HarnessError('Choose a configured PostgreSQL binding.', 'POSTGRES_DATABASE_UNKNOWN')
+    const write = access.kind !== 'audit'
+    const dedicated = access.kind === 'dedicated'
+    if (dedicated && !binding.testSql) throw new HarnessError('Test SQL is disabled for this binding.', 'POSTGRES_TEST_ONLY')
+    if (access.kind === 'shared' && !binding.sharedTestTables.some(({ schema, table }) => schema === access.schema && table === access.table)) {
+      throw new HarnessError('Choose an owner-configured PostgreSQL test table.', 'POSTGRES_TEST_TABLE_NOT_ALLOWED')
+    }
+    const signal = AbortSignal.any([caller, this.lifetime.signal, this.protection.executionSignal()])
+    using timeout = deadline(signal, this.config.timeoutMs, 'POSTGRES_TIMEOUT')
+    const release = this.protection.retainExecution()
+    let client: pg.Client | undefined, socket: Socket | undefined, closed: Promise<void> | undefined
+    let resolution: TargetConnectionResolution | undefined
+    let releaseAdmission: (() => void) | undefined
+    let auditCompleted = false
+    const finished = Promise.withResolvers<undefined>()
+    const commit = { dispatched: false, acknowledged: false }
+    const admitted = async (): Promise<void> => {
+      const decision = await this.protection.checkConnection(binding.hostname, binding.port, resolution,
+        'database', write ? 'mutate' : 'observe', timeout.signal, binding.database, false, this.databaseResources)
+      if (!decision.allowed) throw new HarnessError(TARGET_REFUSAL_REASONS[decision.code], decision.code)
+      if (dedicated) {
+        const instance = await this.protection.checkConnection(binding.hostname, binding.port, resolution,
+          'database', 'mutate', timeout.signal, undefined, false, this.databaseResources)
+        if (!instance.allowed) throw new HarnessError(TARGET_REFUSAL_REASONS[instance.code], instance.code)
+      }
+      timeout.signal.throwIfAborted()
+    }
+    let abort: (() => void) | undefined
+    try {
+      const snapshot = await this.protection.snapshot()
+      await admitted()
+      if (write) {
+        const { preferences } = projectDatabaseResources(snapshot, this.databaseResources)
+        const exactDatabase = expandTargetRules(preferences).some(rule => rule.enabled && rule.kind === 'database'
+          && rule.environment === 'test' && rule.match === 'host' && rule.address === binding.hostname
+          && rule.port === binding.port && rule.database === binding.database)
+        if (!exactDatabase || (dedicated && !hasExactTestServer(preferences, binding.hostname, binding.port))) {
+          const reason = dedicated ? 'Test SQL requires both a dedicated test-server rule and an exact test-database rule.'
+            : 'Structured PostgreSQL writes require an exact test-database rule.'
+          throw new HarnessError(reason, 'POSTGRES_TEST_ONLY')
+        }
+      }
+      const addresses = await this.protection.resolveConnectionTarget(binding.hostname, timeout.signal)
+      const selected = addresses.addresses[0]
+      if (selected === undefined) throw new HarnessError('PostgreSQL target did not resolve.', 'TARGET_IDENTITY_UNVERIFIED')
+      resolution = { ...addresses, addresses: [selected] }
+      const password = await this.credentials.resolve(credentialRef(binding.passwordRef))
+      if (password === undefined || password.value === '') throw new HarnessError('PostgreSQL credential reference is not configured.', 'POSTGRES_CREDENTIAL_UNAVAILABLE')
+      await admitted()
+      releaseAdmission = this.protection.retainNativeExecution(snapshot.revision, async () => {
+        socket?.destroy()
+        await finished.promise
+      })
+      socket = new Socket()
+      const transport = socket
+      closed = new Promise<void>((resolve) => { transport.once('close', () => { resolve() }) })
+      socket.on('error', () => {}) // The driver and operation own reporting; native close is awaited below.
+      abort = () => { transport.destroy() }
+      timeout.signal.addEventListener('abort', abort, { once: true })
+      client = new pg.Client({ host: selected.address, port: binding.port, database: binding.database,
+        user: binding.username, password: password.value, stream: () => transport,
+        ssl: { rejectUnauthorized: true, minVersion: 'TLSv1.2', ...binding.caPem === undefined ? {} : { ca: binding.caPem },
+          ...isIP(binding.hostname) ? {} : { servername: binding.hostname },
+          checkServerIdentity: (_hostname, cert) => checkServerIdentity(binding.hostname, cert) },
+        options: `-c search_path=${dedicated ? 'public' : 'pg_catalog'} -c default_transaction_read_only=${write ? 'off' : 'on'}`,
+        application_name: dedicated ? 'dshu-test-sql' : write ? 'dshu-test-write' : 'dshu-catalog-audit',
+        statement_timeout: this.config.timeoutMs, lock_timeout: this.config.timeoutMs, query_timeout: this.config.timeoutMs,
+        idle_in_transaction_session_timeout: this.config.timeoutMs, connectionTimeoutMillis: this.config.timeoutMs,
+        keepAlive: false, client_encoding: 'UTF8', sslnegotiation: 'postgres',
+      })
+      client.on('error', () => {}) // Active requests reject; no driver error is reported as a successful audit.
+      await client.connect()
+      const connection = client
+      await admitted()
+      let resultBytes = 0
+      const query: RunQuery = async (text, values = [], extended) => {
+        await admitted()
+        const rows: SqlRow[] = []
+        const result = await new Promise<pg.QueryResultBase>((resolve, reject) => {
+          let failed = false
+          const options = { text, values, rowMode: 'array' as const, types: { getTypeParser: () => (value: string): string => value },
+            ...extended ? { queryMode: 'extended' } : {} }
+          const request = new pg.Query<SqlRow, SqlParameter[]>(options, (error, result) => {
+            if (error) reject(error)
+            else resolve(result)
+          })
+          // Array mode and the installed text parsers produce string-or-null cells.
+          request.on('row', (row: (string | null)[]) => {
+            if (failed) return
+            resultBytes += Buffer.byteLength(JSON.stringify(row))
+            if (rows.length >= this.config.maxRows || resultBytes > this.config.maxResultBytes) {
+              failed = true; transport.destroy()
+              reject(new HarnessError('PostgreSQL exceeded its configured result limit.', 'POSTGRES_OUTPUT_LIMIT'))
+              return
+            }
+            rows.push(row)
+          })
+          request.once('error', reject)
+          if (text === 'COMMIT' && !extended) commit.dispatched = true
+          connection.query(request)
+        })
+        if (text === 'COMMIT' && !extended) {
+          commit.acknowledged = true
+          if (result.command !== 'COMMIT') throw new HarnessError('PostgreSQL reported a rollback for the test transaction.', 'POSTGRES_TEST_SQL_FAILED')
+        } else { timeout.signal.throwIfAborted(); await admitted() }
+        return { rows, columns: result.fields.map(field => field.name), rowCount: result.rowCount, command: result.command }
+      }
+      const transaction = access.kind === 'shared' ? 'BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE'
+        : write ? 'BEGIN READ WRITE' : 'BEGIN READ ONLY'
+      await query(transaction)
+      const identity = z.tuple([z.string(), z.string(), z.string(), z.string()]).parse((await query("SELECT pg_catalog.current_database(), session_user, pg_catalog.current_setting('server_version'), pg_catalog.current_setting('transaction_read_only')")).rows[0])
+      if (identity[0] !== binding.database || identity[1] !== binding.username || identity[3] !== (write ? 'off' : 'on')) {
+        throw new HarnessError('PostgreSQL database, login or transaction mode differs from its configured binding.', 'POSTGRES_IDENTITY_MISMATCH')
+      }
+      if (write) {
+        const role = await query(`SELECT (NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls
+          OR EXISTS (SELECT 1 FROM pg_catalog.pg_roles other_role WHERE other_role.oid <> r.oid AND other_role.rolname <> 'pg_database_owner'
+            AND pg_catalog.pg_has_role(r.oid, other_role.oid, 'MEMBER'))))::text
+          FROM pg_catalog.pg_roles r WHERE r.rolname = session_user`)
+        if (role.rows[0]?.[0] !== 'true') throw new HarnessError('Test SQL requires a dedicated role without elevated attributes or memberships.', 'POSTGRES_TEST_ROLE')
+      }
+      const result = await operation(query, identity)
+      if (!write) await query('ROLLBACK')
+      if (Buffer.byteLength(JSON.stringify(result)) > this.config.maxResultBytes) {
+        throw new HarnessError('PostgreSQL exceeded its configured result limit.', 'POSTGRES_OUTPUT_LIMIT')
+      }
+      if (write) await query('COMMIT')
+      else auditCompleted = true
+      return result
+    } catch (error) {
+      if (commit.dispatched && !commit.acknowledged) {
+        throw new HarnessError('PostgreSQL did not acknowledge the commit. Check the test database before retrying.', 'POSTGRES_COMMIT_UNKNOWN', { cause: error })
+      }
+      if (timeout.signal.aborted) throw new HarnessError('PostgreSQL was cancelled or timed out; the connection was closed.', 'POSTGRES_CANCELLED', { cause: error })
+      if (error instanceof HarnessError) throw error
+      if (dedicated) throw new HarnessError('PostgreSQL test SQL failed before a confirmed commit.', 'POSTGRES_TEST_SQL_FAILED', { cause: error })
+      if (write) throw new HarnessError('PostgreSQL test write failed. Check the table schema and role privileges.', 'POSTGRES_TEST_WRITE_FAILED', { cause: error })
+      throw new HarnessError('PostgreSQL audit failed. Check the endpoint, credential reference and TLS configuration.', 'POSTGRES_AUDIT_FAILED', { cause: error })
+    } finally {
+      if (abort !== undefined) timeout.signal.removeEventListener('abort', abort)
+      socket?.destroy()
+      try {
+        if (closed !== undefined) await closed
+        if (client !== undefined) await client.end()
+        if (auditCompleted && timeout.signal.aborted) {
+          throw new HarnessError('PostgreSQL was cancelled or timed out; the connection was closed.', 'POSTGRES_CANCELLED', {
+            cause: timeout.signal.reason,
+          })
+        }
+      } finally {
+        try { releaseAdmission?.() }
+        finally { release(); finished.resolve(undefined) }
+      }
+    }
+  }
+}

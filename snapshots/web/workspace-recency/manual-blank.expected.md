@@ -1,0 +1,6 @@
+- tree "Sessions":
+  - treeitem "Recency workspace" [expanded]
+  - treeitem "New Session" [selected]
+  - treeitem "Newest conversation now"
+  - treeitem "Middle conversation 1min"
+  - treeitem "Oldest conversation 2min"

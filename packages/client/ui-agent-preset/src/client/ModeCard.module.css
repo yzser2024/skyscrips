@@ -1,0 +1,61 @@
+/* Mode identity card shared by the session-header label and its switch
+   trigger. A mode is a filled, fully rounded card in its own color with the
+   shared white ink, so the header reads as one badge rather than a select
+   box: a flat fill, a same-hue rim, and no shadow to compete with the title. */
+
+.card {
+  --mode-fill: var(--dsw-mode-neutral-fill);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  min-height: 28px;
+  padding: 3px 12px 3px 10px;
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid color-mix(in srgb, var(--mode-fill) 86%, var(--dsw-mode-label-ink));
+  /* The shared largest radius is wider than half of the card's height, so the
+     browser clamps it and the card reads as a pill. */
+  border-radius: var(--dsw-radius-lg);
+  color: var(--dsw-mode-label-ink);
+  background: var(--mode-fill);
+  transition:
+    background-color 420ms var(--ds-ease-in-out),
+    border-color 420ms var(--ds-ease-in-out);
+}
+
+.standard { --mode-fill: var(--dsw-mode-standard-fill); }
+.security { --mode-fill: var(--dsw-mode-security-fill); }
+.reverse { --mode-fill: var(--dsw-mode-reverse-fill); }
+.writing { --mode-fill: var(--dsw-mode-writing-fill); }
+.neutral { --mode-fill: var(--dsw-mode-neutral-fill); }
+
+button.card {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  button.card:not(:disabled):not([aria-disabled='true']):hover {
+    background: color-mix(in srgb, var(--mode-fill) 88%, var(--dsw-mode-label-ink));
+  }
+}
+
+button.card:disabled {
+  cursor: default;
+  /* A locked mode still communicates its identity at full contrast. */
+  opacity: 1;
+}
+
+.icon {
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card { transition: none; }
+}

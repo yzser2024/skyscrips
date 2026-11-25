@@ -1,0 +1,32 @@
+- banner:
+  - navigation "Session hierarchy": Reply with a one-sentence description
+  - 'button "Conversation mode: Default" [disabled]': Default
+  - button "Side question"
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: Reply with a one-sentence description of event sourcing, then stop. {{clock}}
+- button "Copy"
+- status: Stopped
+- button "Stopped" [disabled] [expanded]
+- button "Context injection runtime-context"
+- button "Context injection skill-catalog"
+- button "Context injection time-context"
+- paragraph: partial
+- text: Stopped
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Full access"': Full access
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]
+- 'button "Turns: 1 · Steps: 1"'
+- 'button "Conversation cost: ￥0.00"': ￥0.00
+- 'button "Spending limits: Off"': "Off"

@@ -1,0 +1,524 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  container-type: inline-size;
+  container-name: mode-settings;
+  color: var(--dsw-alias-label-primary);
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.intro {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Ordered mode cards retain their names and controls at narrow widths. */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Group-to-group breathing room: the section's 12px gap plus 20px reads the
+   two rosters as separate blocks (32px total). */
+.group + .group {
+  margin-top: 20px;
+}
+
+.groupHead {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Page-level block heading: the two halves of this page — which mode the
+   conversation uses, and which mode is being configured — stay visibly apart. */
+.sectionHead {
+  margin: 8px 0 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Preference rows that act on the whole page (switching and confirmations). */
+.prefs {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+}
+
+/* Configuration for a named mode, independent of the conversation's choice. */
+.config {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.configHint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.tabLabel {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Match neighboring cards within a row, without stretching shorter rows. */
+  gap: 12px;
+}
+
+.card {
+  --mode-fill: var(--dsw-mode-neutral-fill);
+  --mode-icon: var(--mode-fill);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 0.5px solid var(--dsw-alias-settings-card-stroke);
+  border-radius: var(--dsw-radius-xl);
+  display: flex;
+  flex-direction: column;
+  background: var(--dsw-alias-settings-card-fill);
+  transition: border-color .3s, background-color .3s, box-shadow .3s, transform .3s, color .3s;
+}
+
+/* The selected fill spreads from the card's center, so picking a mode floods
+   its card with the mode color instead of swapping backgrounds. */
+.card::before {
+  content: ''; position: absolute; inset: 0 auto 0 0; width: 3px;
+  background: var(--mode-fill); opacity: 0; transform: scaleY(.5);
+  transition: opacity 180ms var(--ds-ease-in-out), transform 300ms var(--ds-ease-in-out); pointer-events: none;
+}
+
+.card[data-agent-preset-id='standard'] { --mode-fill: var(--dsw-mode-standard-fill); }
+.card[data-agent-preset-id='security'] { --mode-fill: var(--dsw-mode-security-fill); }
+.card[data-agent-preset-id='reverse'] { --mode-fill: var(--dsw-mode-reverse-fill); }
+.card[data-agent-preset-id='writing'] { --mode-fill: var(--dsw-mode-writing-fill); }
+
+
+@media (hover: hover) {
+  .card:hover:not(.cardActive) { background: var(--dsw-alias-interactive-bg-hover); }
+}
+
+.cardActive {
+  border-color: color-mix(in srgb, var(--mode-fill) 48%, var(--dsw-alias-border-l2));
+  background: color-mix(in srgb, var(--mode-fill) 6%, var(--dsw-alias-settings-card-fill));
+  box-shadow: none;
+}
+
+.cardActive::before { opacity: 1; transform: none; }
+
+.cardIcon { flex: none; color: var(--mode-icon); }
+
+.cardActive .cardIcon { animation: mode-icon-pop 520ms cubic-bezier(0.22, 0.8, 0.16, 1) both; }
+
+@keyframes mode-icon-pop {
+  0% { transform: scale(0.6) rotate(-12deg); }
+  55% { transform: scale(1.22) rotate(4deg); }
+  100% { transform: none; }
+}
+
+
+
+.cardActive .cardName { font-weight: 500; }
+
+/* Mode selection is off, not the preset itself: mute only the selectable
+   body while the independent view/copy/location actions stay fully usable. */
+/* A broken preset reads as damaged before anything else: the card cannot be
+   picked, so its border carries the warning the disabled body cannot. */
+.cardBroken {
+  border-color: var(--dsw-alias-state-error-primary);
+}
+
+@media (hover: hover) {
+  .cardBroken:hover {
+    border-color: var(--dsw-alias-state-error-primary);
+  }
+}
+
+.brokenBadge {
+  border-radius: 999px;
+  corner-shape: round;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+/* The discovery-reported reason, verbatim: it names the rows and the fix.
+   A real element rather than a generated tooltip, for two reasons: generated
+   content joins the card's accessible text, where this would repeat what the
+   alert already carries, and a tooltip is one `nowrap` line while this names
+   package specifiers one per line. */
+.brokenTip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 1;
+  width: max-content;
+  max-width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-bg-layer-3);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+}
+
+/* Focusing the card reveals it too: a broken card keeps its place in the tab
+   order (`aria-disabled`, not `disabled`), so this is the keyboard path to a
+   reason the card face no longer shows. */
+.cardMain:focus-visible .brokenTip {
+  opacity: 1;
+}
+
+@media (hover: hover) {
+  .brokenBadge:hover .brokenTip {
+    opacity: 1;
+  }
+}
+
+.cardMain[aria-disabled='true'] {
+  cursor: default;
+}
+
+.cardMain:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+
+/* The same reason, for a screen reader. A pointer reveals the badge's tooltip
+   and a keyboard reveals it by focusing the card, but neither announces it;
+   this node is what does. Keeping it out of the card face is what lets a
+   picker card show the preset's own description rather than a package
+   specifier. */
+.cardBrokenReason {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (hover: none) {
+  .cardBrokenReason {
+    position: static;
+    display: block;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+}
+
+/* The card body is the control that picks the preset. */
+.cardMain {
+  flex: 1;
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-radius: var(--dsw-radius-xl) var(--dsw-radius-xl) 0 0;
+}
+
+.cardMain:disabled {
+  cursor: default;
+}
+
+.cardMain:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  /* Anchors the broken badge's tooltip: the badge itself stays unpositioned so
+     the tooltip resolves against the card's own width instead of against a
+     badge that sits partway across it. A tooltip grown from the badge would
+     run past the card, and past the section for a card in the last column. */
+  position: relative;
+}
+
+.cardIdentity {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cardName {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Bounded to four lines. A preset publishes its own description, so one long
+   one would otherwise stretch every card in its grid row. Clamping is CSS
+   alone: the whole text stays in the DOM for assistive
+   tech, and the card offers it on hover when it is actually cut off. The
+   description does not grow to fill the card — `-webkit-line-clamp` on a
+   flex-stretched box leaves the clamp height and the box height disagreeing,
+   so auto margins center the text between the header and footer instead. */
+.cardDesc {
+  margin-block: auto;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--dsw-alias-label-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  /* A user-authored description may carry an unbreakable path or URL. */
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .cardDesc {
+    -webkit-line-clamp: unset;
+  }
+}
+
+.cardId {
+  flex-shrink: 0;
+  max-width: 35%;
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 21px;
+  color: var(--dsw-alias-label-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The footer is one right-aligned group on every card: the same actions in the
+   same order, whatever the mode offers. */
+.cardFoot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 6px 10px;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.helpButton {
+  padding: 5px 6px;
+  min-height: 28px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.helpButton:focus-visible {
+  color: var(--dsw-alias-label-primary);
+}
+
+@media (hover: hover) {
+  .helpButton:hover {
+    color: var(--dsw-alias-label-primary);
+  }
+}
+
+/* Icon-only actions: the label rides the shared tooltip, which escapes the
+   card's clipping box through a body portal. */
+.iconButton {
+  position: relative;
+  appearance: none;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  padding: 6px;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+@media (hover: hover) {
+  .iconButton:hover {
+    background: var(--dsw-alias-bg-layer-1);
+    color: var(--dsw-alias-label-primary);
+  }
+}
+
+.iconButton:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -1px;
+}
+
+.dialog {
+  width: min(720px, 100%);
+}
+
+/* A declared composition can be long; the dialog scrolls it rather than grow. */
+.viewerCode {
+  margin: 0;
+  padding: 12px;
+  max-height: min(60vh, 560px);
+  overflow: auto;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Slot host for the current mode's own materials: it owns no chrome, so a
+   mode without materials contributes nothing to the page. */
+.materials {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.materials:empty {
+  display: none;
+}
+
+/* An in-place refusal: the click that was refused answers beside the heading
+   instead of behind a banner over the dialog. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.noticeIcon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.locked {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The conversational authoring entry, after the card grid. Dashed like the
+   Models page's add affordances: it reads as a place a preset will appear,
+   not a command. */
+.creatorButton {
+  box-sizing: border-box;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  border: 1px dashed var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .creatorButton:hover:not(:disabled) {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+}
+
+.creatorButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .card { animation: modeEnter 220ms var(--ds-ease-in-out) both; }
+  .card:nth-child(2) { animation-delay: 35ms; }
+  .card:nth-child(3) { animation-delay: 70ms; }
+  .card:nth-child(4) { animation-delay: 105ms; }
+}
+@keyframes modeEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .card, .card::before, .brokenTip { transition: none; }
+  .cardIcon { flex: none; }
+
+.cardActive .cardIcon { animation: none; }
+}
+
+@container mode-settings (max-width: 480px) { .cards { grid-template-columns: minmax(0, 1fr); } }
+:global(body[data-ds-dark-theme]) .card[data-agent-preset-id='standard'] { --mode-icon: var(--dsw-mode-standard-accent-dark); }
+:global(body[data-ds-dark-theme]) .card[data-agent-preset-id='security'] { --mode-icon: var(--dsw-mode-security-accent-dark); }
+:global(body[data-ds-dark-theme]) .card[data-agent-preset-id='reverse'] { --mode-icon: var(--dsw-mode-reverse-accent-dark); }
+:global(body[data-ds-dark-theme]) .card[data-agent-preset-id='writing'] { --mode-icon: var(--dsw-mode-writing-accent-dark); }

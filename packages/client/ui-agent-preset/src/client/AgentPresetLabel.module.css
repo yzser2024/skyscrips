@@ -1,0 +1,33 @@
+/* Header mode card extras: glyph entrance, inert state, and the width at which
+   the passive badge yields to the header's interactive actions. */
+
+/* A changed mode remounts the glyph, so it pops in with the new color. */
+.icon {
+  flex: none;
+  animation: label-icon-in 480ms cubic-bezier(0.22, 0.8, 0.16, 1) both;
+}
+
+@keyframes label-icon-in {
+  0% { transform: scale(0.5) rotate(-16deg); opacity: 0; }
+  60% { transform: scale(1.18); opacity: 1; }
+  100% { transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon { animation: none; }
+}
+
+/* Mode switching is off: the card keeps its mode color as identity but reads
+   inert, and its tooltip says why it cannot change. */
+.locked {
+  cursor: default;
+}
+
+/* First sacrifice when the title row (the enclosing inline-size container)
+   runs out of width: the preset is passive chrome, so it yields before any
+   interactive header action loses its label. */
+@container (max-width: 540px) {
+  span.passive {
+    display: none;
+  }
+}

@@ -1,0 +1,19 @@
+version: 1
+scenario: background-confinement-failure
+profile: headless
+composition: background-confinement-failure
+recording: authored
+header:
+  class: background-confinement-failure
+  pin: true
+  systemPromptSource: text-turn
+  toolSchemasSource: text-turn
+replay:
+  override: true
+platform: posix
+permission: read-only
+workspace:
+  final: true
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

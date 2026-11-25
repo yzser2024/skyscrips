@@ -1,0 +1,15 @@
+version: 1
+scenario: browser-use-playwright-mcp
+profile: headless
+# The recorded common tool header includes Bash; real Chromium e2e tests also run on Windows.
+platform: posix
+composition: browser-use-playwright-mcp
+recording: authored
+header:
+  class: browser-use-playwright-mcp
+  pin: true
+replay:
+  override: true
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

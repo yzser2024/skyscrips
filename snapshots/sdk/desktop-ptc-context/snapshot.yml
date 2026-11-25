@@ -1,0 +1,14 @@
+version: 1
+scenario: desktop-ptc-context
+profile: sdk
+permission: workspace-write
+composition: sdk-desktop-ptc
+recording: authored
+header:
+  class: sdk-desktop-ptc
+  pin: true
+  toolSchemasSource: session/ptc-turn
+sessionFormat:
+  version: 4
+  coverage:
+    - behavior-update

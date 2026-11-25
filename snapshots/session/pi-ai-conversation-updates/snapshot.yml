@@ -1,0 +1,13 @@
+version: 1
+scenario: pi-ai-conversation-updates
+profile: headless
+composition: pi-ai-conversation-updates
+recording: authored
+header:
+  class: pi-ai-conversation-updates
+  pin: true
+  changes: 2
+  promptChanges: 1
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

@@ -1,0 +1,112 @@
+import { useLayoutEffect, useRef } from 'react'
+import type { KeyboardEventHandler, ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import clsx from 'clsx'
+import { IconCloseOutlineRegular, IconWarningOutlineRegular } from './icons/index.tsx'
+import { useModalLayer } from './useModalLayer.ts'
+import { useOverlayPresence } from './useOverlayPresence.ts'
+import css from './Modal.module.css'
+
+interface ModalBaseProps {
+  open: boolean
+  onClose: () => void
+  title: string
+  tone?: 'warning'
+  description?: string
+  children?: ReactNode
+  footer?: ReactNode
+  className?: string
+  contentClassName?: string
+  shortcutModal?: string
+  onKeyDownCapture?: KeyboardEventHandler<HTMLDivElement>
+  backdropBlur?: boolean
+  enter?: 'rise' | 'fade'
+}
+
+type ModalProps = ModalBaseProps & (
+  | { headless: true; closeLabel?: never }
+  | { headless?: false; closeLabel: string }
+)
+
+/**
+ * Render a centered, body-portaled modal over a blurred page mask.
+ * Reopening retained exit paint restores foreground order before focus ownership.
+ * @param props.open - whether the dialog is showing.
+ * @param props.onClose - application close command, Escape, or mask click; while a menu is open inside the
+ * dialog, Escape belongs to that menu first.
+ * @param props.title - dialog heading (aria-label in every mode).
+ * @param props.tone - warning adds an amber title icon and compact title-to-body spacing; ignored for headless dialogs.
+ * @param props.closeLabel - localized accessible close-button label.
+ * @param props.description - optional supporting sentence under the title.
+ * @param props.children - dialog body; mark its initial-focus control with
+ * data-modal-autofocus instead of React autoFocus to preserve return focus.
+ * @param props.footer - action row (Cancel / Create).
+ * @param props.contentClassName - optional class for a scrollable content region.
+ * @param props.backdropBlur - disable when the caller already blurs the page; defaults to true.
+ * @param props.enter - entrance motion: "rise" lifts and scales the card, sized for a
+ * narrow dialog; "fade" only fades, so a card wide enough for the 3% scale to read as a
+ * 28px jump opts out. Defaults to "rise".
+ * @param props.shortcutModal - command scope allowed by shortcut owners; unnamed
+ * dialogs block application commands unless their owner allows the "other" scope.
+ * @param props.headless - render children directly in the card (no default
+ * header/close/body chrome); mask, card, Escape, and aria-label remain.
+ * @param props.onKeyDownCapture - handle a nested dialog's keys before the document Escape listeners.
+ * @returns The overlay tree, retained inert for a 120 ms exit after closing; reduced motion removes it immediately.
+ */
+export function Modal({
+  open, onClose, title, closeLabel, description, children, footer, className, contentClassName,
+  onKeyDownCapture, headless = false, backdropBlur = true, shortcutModal, tone, enter = 'rise',
+}: ModalProps) {
+  const dialog = useRef<HTMLDivElement>(null)
+  const root = useRef<HTMLDivElement>(null)
+  const present = useOverlayPresence(open)
+  useLayoutEffect(() => {
+    const element = root.current
+    // Reopened exit paint must regain DOM order before keyboard ownership and focus.
+    if (open && element !== null && element.parentElement?.lastElementChild !== element) {
+      element.parentElement?.append(element)
+    }
+  }, [open])
+  useModalLayer(dialog, open, onClose)
+
+  if (!present) return null
+
+  return createPortal((
+    <div ref={root} className={css.root} role="presentation" {...(open ? {} : { inert: '' })} aria-hidden={!open || undefined} data-exiting={!open || undefined} onKeyDownCapture={onKeyDownCapture}>
+      <div className={css.mask} style={backdropBlur ? undefined : { backdropFilter: 'none' }} aria-hidden="true" onClick={onClose} />
+      <div
+        ref={dialog}
+        tabIndex={-1}
+        data-shortcut-modal={shortcutModal}
+        data-enter={enter}
+        className={clsx(css.dialog, !headless && tone === 'warning' && css.warning, className)}
+        role={open ? 'dialog' : undefined}
+        aria-modal={open || undefined}
+        aria-label={title}
+      >
+        {headless
+          ? children
+          : (
+            <>
+              <div className={clsx(css.content, contentClassName)}>
+                <div className={css.header}>
+                  <h2 className={css.title}>
+                    {tone === 'warning' && <IconWarningOutlineRegular size={18} className={css.warningIcon} aria-hidden="true" />}
+                    {title}
+                  </h2>
+                  <button type="button" className={css.close} aria-label={closeLabel} onClick={onClose}>
+                    <IconCloseOutlineRegular size={14} />
+                  </button>
+                </div>
+                {description !== undefined && description !== '' && (
+                  <p className={css.description}>{description}</p>
+                )}
+                {children !== undefined && <div className={css.body}>{children}</div>}
+              </div>
+              {footer !== undefined && <div className={css.footer}>{footer}</div>}
+            </>
+          )}
+      </div>
+    </div>
+  ), document.body)
+}

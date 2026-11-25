@@ -1,0 +1,207 @@
+.guideDialog {
+  --guide-accent: color-mix(in srgb, var(--mode-fill) 76%, var(--dsw-alias-label-primary));
+  box-sizing: border-box;
+  width: min(720px, 100%);
+  overflow: hidden;
+  max-height: 100%;
+  padding: 0;
+  gap: 0;
+}
+
+:global(body[data-ds-dark-theme]) .guideDialog {
+  --guide-accent: color-mix(in srgb, var(--mode-fill) 60%, var(--dsw-mode-label-ink));
+}
+
+.guideLayout {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.guideHeader {
+  --dsw-focus-ring-color: var(--dsw-mode-label-ink);
+  flex: none;
+  padding: 24px;
+  color: var(--dsw-mode-label-ink);
+  background: var(--mode-fill);
+}
+
+.guideTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.guideIcon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--dsw-radius-lg);
+  color: var(--dsw-mode-label-ink);
+  background: color-mix(in srgb, var(--dsw-mode-label-ink) 16%, transparent);
+}
+
+.guideTitle {
+  flex: 1;
+  margin: 0;
+  font-size: 22px;
+  line-height: 30px;
+  font-weight: 500;
+}
+
+.guideIntro {
+  margin: 14px 0 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-mode-label-ink);
+}
+
+.guideClose {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: var(--dsw-radius-md);
+  color: var(--dsw-mode-label-ink);
+  background: color-mix(in srgb, var(--dsw-mode-label-ink) 10%, transparent);
+}
+
+@media (hover: hover) {
+  .guideHeader .guideClose:hover {
+    color: var(--dsw-mode-label-ink);
+    background: color-mix(in srgb, var(--dsw-mode-label-ink) 22%, transparent);
+  }
+}
+
+.guideTabs {
+  flex: none;
+  align-self: flex-start;
+  width: min(288px, calc(100% - 48px));
+  box-sizing: border-box;
+  margin: 18px 24px;
+}
+
+.guideTabs [role='tab'][aria-selected='true'] {
+  color: var(--guide-accent);
+}
+
+.guidePanel {
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0 24px 24px;
+  font-size: 14px;
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+.guidePanel:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+
+.guidePanel h3 {
+  margin: 20px 0 8px;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--guide-accent);
+}
+
+.guidePanel h3:first-child {
+  margin-top: 0;
+}
+
+.guidePanel p {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--dsw-alias-label-primary);
+}
+
+.guidePanel ul,
+.guidePanel ol {
+  margin: 0 0 16px;
+  padding-inline-start: 22px;
+  line-height: 1.75;
+}
+
+.guidePanel li + li { margin-top: 6px; }
+.guidePanel li::marker { color: var(--guide-accent); }
+
+.guidePanel blockquote {
+  margin: 10px 0 14px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: var(--dsw-radius-lg);
+  background: color-mix(in srgb, var(--mode-fill) 6%, var(--dsw-alias-bg-layer-2));
+  border-inline-start: 2px solid color-mix(in srgb, var(--guide-accent) 45%, transparent);
+}
+
+.guidePanel blockquote p {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Usage pages emphasize the example input, with expected results as supporting copy. */
+.guidePanel[data-guide-page='usage'] p {
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.guidePanel[data-guide-page='usage'] h3 {
+  margin: 0;
+}
+
+.guideExample + .guideExample {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.guideExampleHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.guideExampleTag {
+  flex-shrink: 0;
+  gap: 4px;
+  color: var(--guide-accent);
+  background: color-mix(in srgb, var(--mode-fill) 10%, transparent);
+}
+
+.guidePanel[data-guide-page='usage'] blockquote {
+  margin: 8px 0;
+  padding: 12px 16px;
+}
+
+.guidePanel[data-guide-page='usage'] blockquote p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.guidePanel > :last-child,
+.guideExample > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 480px) {
+  .guideHeader { padding: 20px 18px; }
+  .guideTabs { margin-inline: 18px; width: calc(100% - 36px); }
+  .guidePanel { padding-inline: 18px; padding-bottom: 20px; }
+}

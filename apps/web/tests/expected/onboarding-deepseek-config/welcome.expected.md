@@ -1,0 +1,4 @@
+- dialog "欢迎使用 Uncensored":
+  - heading "欢迎使用 Uncensored" [level=2]
+  - paragraph: 使用独立应用与数据目录，可与官方版并存。选择模式和模型后开始任务，版本来源与构建信息见“关于”。
+  - button "继续"

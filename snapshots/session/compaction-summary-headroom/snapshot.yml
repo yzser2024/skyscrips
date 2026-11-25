@@ -1,0 +1,13 @@
+version: 1
+scenario: compaction-summary-headroom
+profile: headless
+composition: compaction-summary-headroom
+recording: authored
+platform: posix
+header:
+  class: compaction-summary-headroom
+  pin: true
+  changes: 1
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

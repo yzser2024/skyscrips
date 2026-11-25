@@ -1,0 +1,5 @@
+- menu:
+  - 'menuitem "Default Development and everyday work: edit files, run commands, research, and delegate tasks."'
+  - 'menuitem "Security Security analysis and testing: inspect code and configuration, reproduce issues, verify fixes, and retain evidence."'
+  - menuitem "Reverse engineering Trace application behavior, inspect binaries and protocols, and connect findings to verifiable evidence."
+  - 'menuitem "Writing Fiction, scripts, and long-form writing: research, continue, and revise while preserving characters, viewpoint, and continuity."'

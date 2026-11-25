@@ -1,0 +1,3 @@
+- text: Input device
+- button "Input device": USB studio microphone — conference room recording input
+- img "Microphone input level"

@@ -1,0 +1,35 @@
+- banner:
+  - navigation "Session hierarchy": Use the bash tool to
+  - 'button "Conversation mode: Minimal mode" [disabled]': Minimal mode
+  - button "Side question"
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: "Use the bash tool to run exactly: printf 'MINIMAL_BASH_CARD_OK\\n'. Then reply exactly MINIMAL_PRESET_REQUEST_OK and stop. {{clock}}"
+- button "Copy"
+- status: Completed
+- button "Completed in {{duration}}" [expanded]
+- button "Ran commands" [expanded]
+- button "Context injection runtime-context"
+- button "Bash printf 'MINIMAL_BASH_CARD_OK\\n'" [expanded]
+- text: "IN { \"command\": \"printf 'MINIMAL_BASH_CARD_OK\\\\n'\" } OUT MINIMAL_BASH_CARD_OK [Command finished with exit code 0]"
+- button "Inspect"
+- paragraph: MINIMAL_PRESET_REQUEST_OK
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Workspace Write"': Workspace Write
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]
+- 'button "Turns: 1 · Steps: 2 · {{throughput}} tok/s"': "Turns: 1 · Steps: {{throughput}} tok/s"
+- button "28 tok · Cache hit 0%": 28 tokCache hit 0%
+- 'button "Conversation cost: ￥0.000104"': ￥0.000104
+- 'button "Spending limits: Off"': "Off"
+- button "0% of context used": 0%

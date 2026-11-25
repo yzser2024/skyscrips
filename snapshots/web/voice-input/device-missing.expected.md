@@ -1,0 +1,2 @@
+- text: Input device
+- button "Input device" [expanded]: Fake Audio Input 1 — Unavailable

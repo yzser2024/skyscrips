@@ -1,0 +1,10 @@
+- banner:
+  - button "Open right sidebar"
+- text: Explore the Unknown, More Freely
+- button "Choose workspace": workspace
+- button "Default"
+- textbox "Describe what you want to build, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Full access"': Full access
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]

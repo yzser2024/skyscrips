@@ -1,0 +1,642 @@
+/** Agent activation, composition, and initial model route owned by API Session. */
+
+import { randomUUID } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent, AgentHandle, CreateAgentOptions, ResumeAgentOptions, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-preset-registry'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { Session, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
+import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
+import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
+import type {} from '@deepseek-ai/dsh-typert-registry'
+import { installAsideContext, nativeAsideKind, type AsideContextLimits } from './aside-context.ts'
+import { currentSide } from './aside-identity.ts'
+
+/** Cold Session identity absent from persistence. */
+export class ApiSessionNotFound extends Error {}
+
+/** Session identity whose lifecycle belongs to subagent routing. */
+export class ApiSessionSubagentOwnership extends Error {
+  /** @param sessionId - identity reserved to subagent routing. */
+  constructor(readonly sessionId: SessionId) {
+    super(`session "${sessionId}" is a subagent session; use subagent delivery`)
+  }
+}
+
+/** Explicit-id creation attempted to adopt a Session under another cwd. */
+export class ApiSessionCwdConflict extends Error {
+  constructor(
+    readonly sessionId: SessionId,
+    readonly requestedCwd: string,
+    readonly existingCwd: string | undefined,
+  ) {
+    super(
+      existingCwd === undefined
+        ? `session "${sessionId}" records no cwd and cannot be adopted for "${requestedCwd}"`
+        : `session "${sessionId}" belongs to "${existingCwd}", not "${requestedCwd}"`,
+    )
+  }
+}
+
+/** Reuse of a Session named an Agent preset while the deployment composes no preset roster. */
+export class ApiSessionPresetConflict extends Error {
+  constructor(
+    readonly sessionId: SessionId,
+    readonly requestedPreset: string,
+  ) {
+    super(`the deployment composes no agent preset roster, so session "${sessionId}" cannot run preset "${requestedPreset}"`)
+  }
+}
+
+/** A blank Session chosen for reuse started a turn before this Host acquired its writer. */
+class ApiSessionStartedSinceObserved extends Error {}
+
+/** Placement and Agent preset for one Session created for a new conversation. */
+export interface ApiSessionCreateRequest {
+  /** Blank Session to reuse, or the identity of a new Session when none is stored under it. */
+  readonly sessionId?: SessionId
+  /** Directory the Session owns. */
+  readonly cwd: string
+  /** Preset the Session runs; the configured default when omitted. */
+  readonly agentPreset?: string
+  /**
+   * Placement rule the caller owns, such as Workspace membership and archive state.
+   * @param sessionId - existing Session named by the request.
+   * @returns whether that Session may be reused.
+   */
+  readonly reusable: (sessionId: SessionId) => boolean
+}
+
+/** The Session one creation request created or reused. */
+export interface ApiSessionCreated {
+  /** Live Agent of the Session. */
+  readonly agent: Agent
+  /** Preset the Session ran when the request finished, before a later request for the same identity; absent without a roster. */
+  readonly agentPreset: string | undefined
+}
+
+/** Resolved preset and pre-publication Agent setup for one create or resume. */
+interface ApiSessionComposition {
+  readonly agentPreset?: string
+  readonly setup: AgentSetup
+}
+
+/** Failures produced while resolving one ordinary Session identity to its live Agent. */
+export type ApiSessionAgentError = RemoteError<'session/not-found' | 'session/agent-busy' | 'session/writer-held' | 'gateway/internal'>
+
+/** Result of resolving one ordinary Session identity to its live Agent. */
+export type ApiSessionAgentResult =
+  | { readonly agent: Agent }
+  | { readonly error: ApiSessionAgentError }
+
+/**
+ * Test whether generic Session routing must leave an identity to subagent routing.
+ * @param session - Attached or live Session whose origin is tested.
+ * @returns whether subagent routing owns the Session identity.
+ */
+export function hasApiSessionSubagentOwner(session: Pick<Session, 'header'>): boolean {
+  return session.header.origin === 'subagent'
+}
+
+/**
+ * Build the stable caller-facing subagent ownership rejection.
+ * @param sessionId - Session identity owned by subagent routing.
+ * @returns a stable Session-domain failure.
+ */
+export function apiSessionSubagentOwnershipError(sessionId: SessionId): ApiSessionAgentError {
+  return new RemoteError(
+    'session/agent-busy',
+    `session "${sessionId}" is owned by subagent routing`,
+    { reason: 'use subagent delivery for this child session' },
+  )
+}
+
+/** Owns every operation that may create, resume, or configure a Web Agent. */
+export class ApiSessionAgentController {
+  private readonly resumes = new Map<SessionId, Promise<Agent>>()
+  private readonly claims = new Map<SessionId, Promise<void>>()
+  private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
+  private readonly owned = new Map<SessionId, AgentHandle>()
+  private readonly acquiring = new Set<Promise<Agent>>()
+  private readonly deleting = new Set<SessionId>()
+  private readonly clearing = new Set<SessionId>()
+  private readonly deleted = new Set<SessionId>()
+
+  /**
+   * @param ctx - Host context carrying Agent, model, persistence, and Typert services.
+   * @param asideLimits - Byte budgets for the parent context each native aside kind receives.
+   */
+  constructor(private readonly ctx: Context, private readonly asideLimits: AsideContextLimits) {
+    ctx.on('agent/disposed', ({ agent }) => {
+      if (this.owned.get(agent.id)?.agent === agent) this.owned.delete(agent.id)
+    })
+    ctx.on('session-persistence/deleted', (id) => { this.deleted.add(id) })
+    ctx.on('agent/pre-step', ({ agent }, next) => (this.isDeleting(agent.id) || this.clearing.has(agent.id))
+      ? Promise.resolve({ kind: 'reject' as const }) : next())
+  }
+
+  /** Configure Session and Agent lookups after Typert is ready. */
+  initialize(): void {
+    const ctx = this.ctx
+    ctx.typert.lookups.configure('agent', async (sessionId: SessionId) => {
+      const found = await this.resolveAgent(sessionId)
+      if ('error' in found) throw found.error
+      return found.agent
+    })
+    ctx.typert.lookups.configure('session', async (sessionId: SessionId) => {
+      const found = await this.resolveAgent(sessionId)
+      if ('error' in found) throw found.error
+      return found.agent.session
+    })
+    ctx.typert.contexts.configureHost('agent', async (sessionId: SessionId) => {
+      const found = await this.resolveAgent(sessionId)
+      if ('error' in found) throw found.error
+      return found.agent.ctx
+    })
+  }
+
+  /**
+   * Resolve or resume one ordinary Session, deduplicating concurrent resumes.
+   * @param sessionId - ordinary Session identity.
+   * @returns the live Agent or a stable Session-domain failure.
+   */
+  async resolveAgent(sessionId: SessionId): Promise<ApiSessionAgentResult> {
+    const error = this.unavailable(sessionId) ?? await this.retiredSide(sessionId)
+    if (error !== undefined) return { error }
+    return this.resolve(sessionId)
+  }
+
+  /**
+   * Resolve one ordinary Session from an already-retained exact observation.
+   * @param observation - Host-owned observation whose preparation stays pinned through setup.
+   * @returns the live Agent or a stable Session-domain failure.
+   */
+  async resolveObservedAgent(observation: SessionObservation): Promise<ApiSessionAgentResult> {
+    const error = this.unavailable(observation.header.id) ?? await this.retiredSide(observation.header.id, observation.header)
+    if (error !== undefined) return { error }
+    return this.resolve(observation.header.id, observation)
+  }
+
+  private async retiredSide(id: SessionId, observed?: SessionHeader): Promise<ApiSessionAgentError | undefined> {
+    // An exact API-owned writer cannot be replaced by another Host before this owner releases it.
+    if (!id.startsWith('session-side-') || this.owns(id)) return undefined
+    const header = observed ?? this.ctx.sessions.get(id)?.header ?? (await this.ctx.get('sessionPersistence')?.stat(id))?.header
+    const parent = header?.parentSession
+    if (parent === undefined || nativeAsideKind(id, parent) !== 'side') return undefined
+    const current = await currentSide(this.ctx, parent)
+    if (current !== undefined && current.id !== id) {
+      return new RemoteError('session/agent-busy', 'This side context was cleared. Reopen the side conversation.', { reason: 'side-context-cleared' })
+    }
+  }
+
+  /**
+   * Stop API admission to one side while its owner drains and publishes a fresh context.
+   * @param id - Exact current side identity; the main conversation remains available.
+   * @param operation - Owned teardown and successor publication.
+   * @returns Completion after releasing the temporary admission guard.
+   */
+  async withAsideReset<T>(id: SessionId, operation: () => Promise<T>): Promise<T> {
+    const error = this.unavailable(id)
+    if (error !== undefined) throw error
+    this.clearing.add(id)
+    try { return await operation() }
+    finally { this.clearing.delete(id) }
+  }
+
+  /**
+   * Hold admission closed while a user-requested deletion owns the affected Sessions.
+   * @param root - Requested ordinary conversation.
+   * @param operation - Deletion work; include closes admission for newly discovered related identities.
+   * @returns The deletion result after releasing its temporary admission guard.
+   */
+  async withDeletion<T>(root: SessionId, operation: (include: (ids: readonly SessionId[]) => void) => Promise<T>): Promise<T> {
+    const held = new Set<SessionId>()
+    const include = (ids: readonly SessionId[]): void => {
+      for (const id of ids) {
+        if (this.deleting.has(id) && !held.has(id)) throw new RemoteError('session/agent-busy', 'Session deletion is in progress.', { reason: 'deleting' })
+        this.deleting.add(id); held.add(id)
+      }
+    }
+    try {
+      include([root])
+      await Promise.allSettled([...this.resumes.values(), ...this.claims.values(), ...this.acquiring])
+      return await operation(include)
+    } finally { for (const id of held) this.deleting.delete(id) }
+  }
+
+  /**
+   * Check whether deletion blocks this Session or its owned ancestry.
+   * @param id - Session proposing an operation.
+   * @returns Whether an affected Session is being deleted or already deleted.
+   */
+  isDeleting(id: SessionId): boolean {
+    const visited = new Set<SessionId>()
+    let cursor: SessionId | undefined = id
+    while (cursor !== undefined && !visited.has(cursor)) {
+      if (this.deleting.has(cursor) || this.deleted.has(cursor)) return true
+      visited.add(cursor)
+      const header: SessionHeader | undefined = this.ctx.sessions.get(cursor)?.header
+      if (header === undefined || (header.origin !== 'subagent' && nativeAsideKind(cursor, header.parentSession) === undefined)) return false
+      cursor = header.parentSession
+    }
+    return false
+  }
+
+  private unavailable(id: SessionId, parent?: SessionId): ApiSessionAgentError | undefined {
+    if (this.clearing.has(id)) return new RemoteError('session/agent-busy', 'The side conversation is clearing its context.', { reason: 'clearing' })
+    if (this.deleted.has(id) || (parent !== undefined && this.deleted.has(parent))) {
+      return new RemoteError('session/not-found', 'Session was deleted.', { sessionId: id })
+    }
+    if (this.isDeleting(id) || (parent !== undefined && this.isDeleting(parent))) {
+      return new RemoteError('session/agent-busy', 'Session deletion is in progress.', { reason: 'deleting' })
+    }
+  }
+
+  private assertAvailable(id: SessionId, parent?: SessionId): void {
+    const error = this.unavailable(id, parent)
+    if (error !== undefined) throw error
+  }
+
+  /**
+   * Create an API-owned Agent and retain its teardown capability.
+   * @param options - Complete factory request, including source lineage for forks and native asides.
+   * @returns The newly owned Agent.
+   */
+  createOwned(options: CreateAgentOptions): Promise<Agent> {
+    return this.acquire(() => this.ctx.agents.create(options), options.sessionId, options.meta?.parentSession)
+  }
+
+  private resumeOwned(options: ResumeAgentOptions, parent?: SessionId): Promise<Agent> {
+    return this.acquire(() => this.ctx.agents.resume(options), options.resumeSessionId, parent)
+  }
+
+  private acquire(factory: () => Promise<AgentHandle>, id: SessionId, parent?: SessionId): Promise<Agent> {
+    this.assertAvailable(id, parent)
+    const pending = factory().then(async (handle) => {
+      this.owned.set(id, handle)
+      try { this.assertAvailable(id, parent) }
+      catch (error) { await handle.dispose(); throw error }
+      return handle.agent
+    })
+    this.acquiring.add(pending)
+    const settled = (): void => { this.acquiring.delete(pending) }
+    void pending.then(settled, settled)
+    return pending
+  }
+
+  /**
+   * Check that a published writer can be retired by this API owner.
+   * @param id - Session requested for deletion.
+   */
+  assertOwnedOrCold(id: SessionId): void {
+    const live = this.ctx.agents.get(id)
+    if ((live !== undefined && this.owned.get(id)?.agent !== live)
+      || (live === undefined && this.ctx.sessions.get(id) !== undefined)) {
+      throw new RemoteError('session/writer-held', 'Session is held by another runtime. Close it there before deleting.', { sessionId: id })
+    }
+  }
+
+  /**
+   * Identify live Agents whose composition and teardown this controller owns.
+   * @param id - Session identity proposed for automatic cold recovery.
+   * @returns Whether this controller retains the current Agent's lifecycle handle.
+   */
+  owns(id: SessionId): boolean {
+    const handle = this.owned.get(id)
+    return handle !== undefined && handle.agent === this.ctx.agents.get(id)
+  }
+
+  /**
+   * Stop and drain the exact Agent whose teardown capability this API owns.
+   * @param id - Session already excluded from new API admission.
+   * @returns Completion after scoped work and its persistence writer have been released.
+   */
+  async disposeOwned(id: SessionId): Promise<void> {
+    this.assertOwnedOrCold(id)
+    await this.owned.get(id)?.dispose()
+  }
+
+  private async resolve(
+    sessionId: SessionId,
+    observation?: SessionObservation,
+  ): Promise<ApiSessionAgentResult> {
+    const live = this.liveAgent(sessionId)
+    if (live !== undefined) return live
+    const attached = this.ctx.sessions.get(sessionId)
+    if (attached !== undefined && hasApiSessionSubagentOwner(attached)) {
+      return { error: apiSessionSubagentOwnershipError(sessionId) }
+    }
+
+    let resume = this.resumes.get(sessionId)
+    if (resume === undefined) {
+      resume = this.resume(sessionId, observation).finally(() => { this.resumes.delete(sessionId) })
+      this.resumes.set(sessionId, resume)
+    }
+    try {
+      const agent = await resume
+      // A shared resume can publish an identity that subagent routing adopts
+      // before every waiter observes it; apply the live ownership policy again.
+      const published = this.liveAgent(sessionId)
+      return published ?? { agent }
+    } catch (error: unknown) {
+      if (error instanceof ApiSessionNotFound) {
+        return { error: new RemoteError('session/not-found', error.message, { sessionId }) }
+      }
+      const remote = remoteErrorOf(error)
+      if (remote?.code === 'session/not-found' || remote?.code === 'session/agent-busy'
+        || remote?.code === 'session/writer-held' || remote?.code === 'gateway/internal') return { error: remote }
+      if (error instanceof ApiSessionSubagentOwnership) {
+        return { error: apiSessionSubagentOwnershipError(error.sessionId) }
+      }
+      const raced = this.liveAgent(sessionId)
+      if (raced !== undefined) return raced
+      const racedSession = this.ctx.sessions.get(sessionId)
+      if (racedSession !== undefined && hasApiSessionSubagentOwner(racedSession)) {
+        return { error: apiSessionSubagentOwnershipError(sessionId) }
+      }
+      if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
+        return { error: new RemoteError('session/writer-held', error.message, { sessionId }) }
+      }
+      return {
+        error: new RemoteError(
+          'gateway/internal',
+          `resume failed for session "${sessionId}": ${String(error)}`,
+          {},
+        ),
+      }
+    }
+  }
+
+  /**
+   * Create a Session for a new conversation, reusing the named blank Session
+   * while it is still reusable. A reused Session runs the requested preset, or
+   * the configured default when the request names none; the preset it recorded
+   * is not resolved, and a change is logged as `agent-preset/selected` before
+   * the Agent is published. A named Session that has started a turn, fails the
+   * caller's placement rule, or is written by another owner stays unchanged,
+   * and a new Session is created instead. Requests naming one identity run in
+   * arrival order, including their preset resolution, and check the named
+   * Session's directory and ownership before resolving the preset.
+   * @param request - optional Session to reuse, directory, preset, and placement rule.
+   * @returns the reused or created Session and the preset it ran when this request finished.
+   * @throws ApiSessionCwdConflict when the named Session belongs to another directory.
+   * @throws ApiSessionSubagentOwnership when subagent routing owns the named Session.
+   * @throws RemoteError `agent-preset/not-found` or `agent-preset/invalid` for the requested or default preset.
+   * @throws RemoteError `security-entry/required` when an explicit Security preset needs this launch's first-entry acknowledgement.
+   * @throws ApiSessionPresetConflict when no roster is composed and the request names a preset for a reused Session.
+   */
+  async createSession(request: ApiSessionCreateRequest): Promise<ApiSessionCreated> {
+    this.ctx.get('agentPresets')?.assertNewConversationPreset(request.agentPreset)
+    const named = request.sessionId
+    if (named !== undefined) this.assertAvailable(named)
+    if (named === undefined) return this.created(await this.createMinted(request.cwd, await this.composeAgent(request.agentPreset)))
+    return this.inOrder(named, async () => this.created(await this.claim(named, request)))
+  }
+
+  /**
+   * Read the current Agent preset from the Session projection.
+   * @param session - live Session whose projection state is available.
+   * @returns the current preset, or undefined without a preset service or recorded selection.
+   */
+  presetForSession(session: Session): string | undefined {
+    return this.ctx.get('agentPresets')?.presetForSession(session) ?? undefined
+  }
+
+  /**
+   * Serialize image admission and model selection for one Agent.
+   * @param agent - live Agent that owns the serialization chain.
+   * @param operation - asynchronous operation admitted after prior work settles.
+   * @returns the operation result or rejection.
+   */
+  serializeImageAdmission<Value>(agent: Agent, operation: () => Promise<Value>): Promise<Value> {
+    const result = (this.imageAdmissionChains.get(agent) ?? Promise.resolve()).then(operation)
+    this.imageAdmissionChains.set(agent, result.then(() => undefined, () => undefined))
+    return result
+  }
+
+  /**
+   * Resolve the preset id and pre-publication Agent setup for a create or resume.
+   * @param presetId - requested preset or the configured default when omitted.
+   * @returns the resolved preset identity and Agent setup callback.
+   */
+  async composeAgent(presetId: string | undefined): Promise<ApiSessionComposition> {
+    const presets = this.ctx.get('agentPresets')
+    if (presets === undefined) {
+      return { setup: async (agentCtx, agent) => {
+        installModelSelection(agentCtx)
+        await installAsideContext(agentCtx, agent, this.asideLimits)
+      } }
+    }
+    const resolvedId = (await presets.resolve(presetId)).id
+    return {
+      agentPreset: resolvedId,
+      setup: async (agentCtx, agent) => {
+        installModelSelection(agentCtx)
+        await presets.mount(agentCtx, resolvedId)
+        await installAsideContext(agentCtx, agent, this.asideLimits)
+      },
+    }
+  }
+
+  private liveAgent(sessionId: SessionId): ApiSessionAgentResult | undefined {
+    const agent = this.ctx.agents.get(sessionId)
+    if (agent === undefined) return undefined
+    return hasApiSessionSubagentOwner(agent.session)
+      ? { error: apiSessionSubagentOwnershipError(sessionId) }
+      : { agent }
+  }
+
+  private async resume(sessionId: SessionId, supplied?: SessionObservation): Promise<Agent> {
+    if (supplied !== undefined) return this.resumeObserved(sessionId, supplied)
+    try {
+      using observation = await this.ctx.sessionQuery.observeSession(sessionId)
+      return await this.resumeObserved(sessionId, observation)
+    } catch (error: unknown) {
+      if (error instanceof SessionQueryError
+        && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
+        throw new ApiSessionNotFound(`session "${sessionId}" not found`)
+      }
+      throw error
+    }
+  }
+
+  private async resumeObserved(
+    sessionId: SessionId,
+    observation: SessionObservation,
+  ): Promise<Agent> {
+    if (observation.header.id !== sessionId || observation.header.cwd === undefined) {
+      throw new ApiSessionNotFound(`session "${sessionId}" not found`)
+    }
+    if (hasApiSessionSubagentOwner({ header: observation.header })) {
+      throw new ApiSessionSubagentOwnership(sessionId)
+    }
+    const composition = await this.composeAgent(this.presetForObservation(observation))
+    const published = this.ctx.sessions.get(sessionId)
+    if (published !== undefined && hasApiSessionSubagentOwner(published)) {
+      throw new ApiSessionSubagentOwnership(sessionId)
+    }
+    return this.resumeOwned({
+      resumeSessionId: sessionId,
+      agentOptions: this.agentOptions(),
+      setup: composition.setup,
+    }, nativeAsideKind(sessionId, observation.header.parentSession) === undefined ? undefined : observation.header.parentSession)
+  }
+
+  private async inOrder<Value>(sessionId: SessionId, operation: () => Promise<Value>): Promise<Value> {
+    const result = (this.claims.get(sessionId) ?? Promise.resolve()).then(operation)
+    const settled = result.then(() => undefined, () => undefined)
+    this.claims.set(sessionId, settled)
+    try {
+      return await result
+    } finally {
+      if (this.claims.get(sessionId) === settled) this.claims.delete(sessionId)
+    }
+  }
+
+  /** @returns the reused Session, a new Session under `sessionId` when none is stored, or a new Session under a minted identity. */
+  private async claim(sessionId: SessionId, request: ApiSessionCreateRequest): Promise<Agent> {
+    const attached = this.ctx.sessions.get(sessionId)
+    const live = this.ctx.agents.get(sessionId)
+    if (attached !== undefined && hasApiSessionSubagentOwner(attached)) {
+      throw new ApiSessionSubagentOwnership(sessionId)
+    }
+    if (live !== undefined) {
+      if (live.session.header.cwd !== request.cwd) {
+        throw new ApiSessionCwdConflict(live.id, request.cwd, live.session.header.cwd)
+      }
+      const composition = await this.composeAgent(request.agentPreset)
+      return await this.reuseLive(live, request, composition) ?? this.createMinted(request.cwd, composition)
+    }
+    let observation: SessionObservation
+    try {
+      observation = await this.ctx.sessionQuery.observeSession(sessionId)
+    } catch (error: unknown) {
+      if (!(error instanceof SessionQueryError) || error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
+      return this.createAgent(sessionId, request.cwd, await this.composeAgent(request.agentPreset))
+    }
+    let reusable: boolean
+    {
+      using observed = observation
+      if (hasApiSessionSubagentOwner({ header: observed.header })) {
+        throw new ApiSessionSubagentOwnership(sessionId)
+      }
+      if (observed.header.cwd !== request.cwd) {
+        throw new ApiSessionCwdConflict(sessionId, request.cwd, observed.header.cwd)
+      }
+      reusable = request.reusable(sessionId) && !observed.events.some(event => event.type === 'turn/start')
+    }
+    const composition = await this.composeAgent(request.agentPreset)
+    if (!reusable) return this.createMinted(request.cwd, composition)
+    this.assertPresetApplicable(sessionId, request.agentPreset)
+    try {
+      return await this.resumeOwned({
+        resumeSessionId: sessionId,
+        agentOptions: this.agentOptions(),
+        setup: this.reuseSetup(composition),
+      })
+    } catch (error: unknown) {
+      if (error instanceof ApiSessionStartedSinceObserved) return this.createMinted(request.cwd, composition)
+      if (!(error instanceof Error) || error.name !== 'SessionAlreadyOwnedError') throw error
+      // Another resume in this process may hold the writer for the Agent it published.
+      return this.ctx.agents.get(sessionId) === undefined
+        ? this.createMinted(request.cwd, composition)
+        : this.claim(sessionId, request)
+    }
+  }
+
+  /** @returns the live blank Session under the requested preset, or undefined when it cannot be reused. */
+  private async reuseLive(
+    live: Agent,
+    request: ApiSessionCreateRequest,
+    composition: ApiSessionComposition,
+  ): Promise<Agent | undefined> {
+    if (!request.reusable(live.id) || !this.isBlank(live.session)) return undefined
+    this.assertPresetApplicable(live.id, request.agentPreset)
+    const current = this.presetForSession(live.session)
+    const presets = this.ctx.get('agentPresets')
+    const target = composition.agentPreset
+    if (presets === undefined || target === undefined || target === current) return live
+    try {
+      await presets.select(live, target)
+    } catch (error: unknown) {
+      if (remoteErrorOf(error)?.code !== 'agent-preset/locked') throw error
+      return undefined
+    }
+    return live
+  }
+
+  /** Setup that re-checks blankness under the acquired writer, then records a preset change before publication. */
+  private reuseSetup(composition: ApiSessionComposition): AgentSetup {
+    return async (agentCtx, agent) => {
+      if (!this.isBlank(agent.session)) throw new ApiSessionStartedSinceObserved()
+      const commit = await composition.setup(agentCtx, agent)
+      const target = composition.agentPreset
+      if (target !== undefined && this.presetForSession(agent.session) !== target) {
+        agent.session.append('agent-preset/selected', { agentPreset: target })
+      }
+      return commit
+    }
+  }
+
+  /** Whether no turn has started, by the predicate the preset registry's `select` enforces. */
+  private isBlank(session: Session): boolean {
+    const boundary = this.ctx.agents.turnBoundaryOf(session)
+    return boundary.openTurnStartSeq === null && boundary.lastTurn === 0
+  }
+
+  /** Without a roster, reuse cannot apply a named preset. */
+  private assertPresetApplicable(sessionId: SessionId, requested: string | undefined): void {
+    if (requested === undefined || this.ctx.get('agentPresets') !== undefined) return
+    throw new ApiSessionPresetConflict(sessionId, requested)
+  }
+
+  private created(agent: Agent): ApiSessionCreated {
+    return { agent, agentPreset: this.presetForSession(agent.session) }
+  }
+
+  private createMinted(cwd: string, composition: ApiSessionComposition): Promise<Agent> {
+    return this.createAgent(brandString<SessionId>(`session-${randomUUID()}`), cwd, composition)
+  }
+
+  private async createAgent(sessionId: SessionId, cwd: string, composition: ApiSessionComposition): Promise<Agent> {
+    try {
+      await mkdir(cwd, { recursive: true })
+    } catch (error: unknown) {
+      throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
+    }
+    return this.createOwned({
+      sessionId,
+      agentOptions: this.agentOptions(),
+      meta: {
+        cwd,
+        ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
+      },
+      setup: composition.setup,
+    })
+  }
+
+  private agentOptions(): AgentOptions {
+    const defaults = this.ctx.agentDefaultModel
+    // A Session that records no selection or request follows default changes.
+    return {
+      get provider() { return defaults.currentSelection().provider },
+      get model() { return defaults.currentSelection().model },
+      get reasoningEffort() { return defaults.currentSelection().reasoningEffort },
+    }
+  }
+
+  /**
+   * Read the current Agent preset from an all-projections observation.
+   * @param observation - exact Session observation carrying its projection snapshot.
+   * @returns the current preset, or undefined when the capability is absent.
+   */
+  presetForObservation(observation: SessionObservation): string | undefined {
+    if (observation.projections === undefined) {
+      throw new Error('api-session: Agent activation requires a projected Session observation')
+    }
+    return observation.projections.values.agentPreset ?? undefined
+  }
+}

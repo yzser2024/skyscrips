@@ -1,0 +1,6 @@
+- navigation "Session hierarchy": Seeded turn
+- 'button "Conversation mode: Minimal mode" [disabled]': Minimal mode
+- button "1 subagent"
+- button "Side question"
+- button "More actions"
+- button "Open right sidebar"

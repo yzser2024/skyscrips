@@ -1,0 +1,5 @@
+- region "账号":
+  - text: Radius example
+  - status: r***@example.com
+  - link "更多账号信息":
+    - /url: https://platform.deepseek.com/

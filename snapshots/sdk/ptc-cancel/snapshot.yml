@@ -1,0 +1,11 @@
+version: 1
+scenario: ptc-cancel
+profile: sdk
+permission: danger-full-access
+composition: ptc
+recording: authored
+header:
+  class: ptc
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

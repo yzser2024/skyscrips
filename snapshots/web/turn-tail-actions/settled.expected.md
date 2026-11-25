@@ -1,0 +1,34 @@
+- banner:
+  - navigation "Session hierarchy": Begin your reply with the
+  - 'button "Conversation mode: Default" [disabled]': Default
+  - button "Side question"
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: Begin your reply with the plain sentence "Reading the workspace now." as text, and in that same message call the bash tool with the command "echo alpha". After the tool result, reply with the single word DONE and stop. {{clock}}
+- button "Copy"
+- status: Stopped
+- button "Stopped" [disabled] [expanded]
+- button "Analysis completed"
+- paragraph: Reading the workspace now.
+- button "Ran commands"
+- paragraph: partial
+- text: Stopped
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Full access"': Full access
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]
+- 'button "Turns: 1 · Steps: 2 · {{throughput}} tok/s"': "Turns: 1 · Steps: {{throughput}} tok/s"
+- button "7.9K tok · Cache hit 0%": 7.9K tokCache hit 0%
+- 'button "Conversation cost: ￥0.02"': ￥0.02
+- 'button "Spending limits: Off"': "Off"
+- button "6% of context used": 6%

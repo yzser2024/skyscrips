@@ -1,0 +1,125 @@
+/** Plugins settings section: localized tabs around feature-owned pages. */
+
+import { useEffect, useId, useRef, useState } from 'react'
+import type {
+  HostObservable, InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime,
+} from '@deepseek-ai/dsh-client-ui-slots'
+import type { PluginsSettingsLocaleKey } from './locales.ts'
+import css from './PluginsSettingsSection.module.css'
+
+/** One tab projected from a `settings.plugins.tab` contribution. */
+export interface PluginsSettingsTabEntry {
+  id: string
+  order: number
+  label: string
+}
+
+/** Registration-side business face for the section. */
+export interface PluginsSettingsSectionInjected {
+  hooks: {
+    /** Ordered, locale-aware projection of the Plugins tab ledger. */
+    tabs: HostObservable<readonly PluginsSettingsTabEntry[]>
+    /** Shared tab selection accepts links from other settings features. */
+    navigation: HostObservable<string | undefined>
+  }
+  /** Select the page shown inside the Plugins group. */
+  selectTab(id: string): void
+}
+
+/** Props the renderer binds for the section. */
+export type PluginsSettingsSectionProps =
+  PropsRuntime<'settings.section'>
+  & PropsLocale<'settings.plugins'>
+  & PropsRenderSlots<'settings.plugins.tab'>
+  & InjectFace<PluginsSettingsSectionInjected>
+
+/** Render one Plugins page whose contents arrive from feature-owned tabs; one contribution shows as the page itself. */
+export function PluginsSettingsSection({ t, renderSlot, useTabs, useNavigation, selectTab }: PluginsSettingsSectionProps) {
+  const tabsId = useId()
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const rows = useTabs(value => value)
+  const activeId = useNavigation(value => value)
+  const [visitedIds, setVisitedIds] = useState<ReadonlySet<string>>(() => new Set())
+  const active = rows.find(row => row.id === activeId)?.id ?? rows[0]?.id
+  const tabbed = rows.length > 1
+
+  // Visited tabs remain mounted across selection and sibling tab changes.
+  useEffect(() => {
+    if (active === undefined) return
+    setVisitedIds((previous) => {
+      if (previous.has(active)) return previous
+      return new Set([...previous, active])
+    })
+  }, [active])
+
+  return (
+    <div className={css.section}>
+      <h2 className={css.heading}>{t('title')}</h2>
+      <p className={css.intro}>{t('intro')}</p>
+      {rows.length === 0 ? <p className={css.empty}>{t('empty')}</p> : null}
+      {tabbed ? (
+        <div className={css.tabs} role="tablist" aria-label={t('tabs')}>
+          {rows.map((row, index) => {
+            const selected = row.id === active
+            return (
+              <button
+                key={row.id}
+                ref={(element) => { tabRefs.current[index] = element }}
+                id={`${tabsId}-tab-${row.id}`}
+                type="button"
+                role="tab"
+                className={css.tab}
+                aria-selected={selected}
+                aria-controls={`${tabsId}-panel-${row.id}`}
+                data-active={selected ? 'true' : undefined}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => { selectTab(row.id) }}
+                onKeyDown={(event) => {
+                  let nextIndex: number
+                  switch (event.key) {
+                    case 'ArrowRight': nextIndex = (index + 1) % rows.length; break
+                    case 'ArrowLeft': nextIndex = (index - 1 + rows.length) % rows.length; break
+                    case 'Home': nextIndex = 0; break
+                    case 'End': nextIndex = rows.length - 1; break
+                    default: return
+                  }
+                  event.preventDefault()
+                  const nextRow = rows[nextIndex] as PluginsSettingsTabEntry
+                  const nextTab = tabRefs.current[nextIndex] as HTMLButtonElement
+                  selectTab(nextRow.id)
+                  nextTab.focus()
+                }}
+              >
+                {row.label}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+      {rows
+        .filter(row => row.id === active || visitedIds.has(row.id))
+        .map((row) => {
+          const selected = row.id === active
+          return (
+            <div
+              key={row.id}
+              id={tabbed ? `${tabsId}-panel-${row.id}` : undefined}
+              className={css.panel}
+              role={tabbed ? 'tabpanel' : undefined}
+              aria-labelledby={tabbed ? `${tabsId}-tab-${row.id}` : undefined}
+              hidden={!selected}
+            >
+              {renderSlot('settings.plugins.tab', {}, { only: row.id })}
+            </div>
+          )
+        })}
+    </div>
+  )
+}
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** Built-in plugins section and plugin configuration page copy. */
+    'settings.plugins': PluginsSettingsLocaleKey
+  }
+}

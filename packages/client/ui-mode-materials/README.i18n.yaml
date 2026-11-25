@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/client/ui-mode-materials/README.md
+/:
+  en: 28d300f26c99ff71
+  zh: 28d300f26c99ff71
+/deepseek-ai-dsh-client-ui-mode-materials:
+  en: 07ae0c02fd5e09a2
+  zh: 2aaf9dca8aa8637f
+/deepseek-ai-dsh-client-ui-mode-materials/summary:
+  en: 251dfeb547f88bb5
+  zh: 4a39066aa7305856
+/deepseek-ai-dsh-client-ui-mode-materials/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 5103e1812d95589b
+/deepseek-ai-dsh-client-ui-mode-materials/use-this-package:
+  en: f527a84ecffe8025
+  zh: 8d5b49bd0c430a11
+/deepseek-ai-dsh-client-ui-mode-materials/use-this-package/editing-and-conflicts:
+  en: 65078792364e0fe0
+  zh: e675cf325fbab0f9
+/deepseek-ai-dsh-client-ui-mode-materials/use-this-package/deleting:
+  en: eb119fd1b866d04d
+  zh: 2b354907428fd5a5
+/deepseek-ai-dsh-client-ui-mode-materials/understand-the-implementation:
+  en: ea78d5b39f2bf83a
+  zh: 0bb563f8b66171d1
+/deepseek-ai-dsh-client-ui-mode-materials/further-exploration:
+  en: 1c930ecafd47c457
+  zh: 8434004e29a69992
+/deepseek-ai-dsh-client-ui-mode-materials/model-experience:
+  en: 696d6ff882af5212
+  zh: ea11304b97581adc
+/deepseek-ai-dsh-client-ui-mode-materials/known-limitations-and-deferred-work:
+  en: ad455d6094a8a004
+  zh: 478f7833d4e91073
+/deepseek-ai-dsh-client-ui-mode-materials/dev-note:
+  en: 3305600425a4a27e
+  zh: a57be3f0f146add3

@@ -1,0 +1,240 @@
+/**
+ * The Remote surface of the security-mode egress proxy: settings, connection
+ * check, and the bounded traffic list/detail the settings panel renders.
+ *
+ * Mutations and captured exchanges require the application owner. Status reads
+ * report upstream password presence without returning the secret.
+ * @module @deepseek-ai/dsh-security-proxy-local/service
+ */
+
+import type { Context } from '@deepseek-ai/cordis'
+import { principalOf, Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import type {
+  SecurityProxyCaptureStats,
+  SecurityProxyCaptureExport,
+  SecurityProxyExportQuery,
+  SecurityProxyFlowDetail,
+  SecurityProxyFlowQuery,
+  SecurityProxyFlowsResult,
+  SecurityProxySettingsPatch,
+  SecurityProxyState,
+  SecurityProxyTestResult,
+} from '@deepseek-ai/dsh-security-proxy/types'
+import type { SecurityProxyEgressLease } from '@deepseek-ai/dsh-security-proxy'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { WebFetchResult } from '@deepseek-ai/dsh-web'
+import type { SecurityProxyEngine } from './engine.ts'
+
+/**
+ * Host service consumed by tools in-process and by the settings panel over the
+ * Remote gateway. One instance serves the whole Host.
+ */
+export class SecurityProxyService extends TypertRemoteService {
+  /**
+   * @param ctx - owning context; the service registers as `ctx.securityProxy`.
+   * @param engine - the proxy runtime this service fronts.
+   */
+  constructor(ctx: Context, private readonly engine: SecurityProxyEngine) {
+    super(ctx, 'securityProxy', { namespace: 'securityProxy' })
+  }
+
+  /**
+   * Resolve whether one tool execution is routed through the proxy.
+   * @param agent - the executing Agent.
+   * @param tool - the model-facing tool name.
+   * @returns the route, or undefined when the session is not covered.
+   */
+  route(agent: Agent | undefined, tool: string): { sessionId: SessionId; preset: string; tool: string } | undefined {
+    return this.engine.route(agent, tool)
+  }
+
+  /**
+   * Environment for one child process in a covered session.
+   * @param agent - the executing Agent.
+   * @param tool - the model-facing tool name.
+   * @returns the overlay, or undefined when the session is not covered.
+   */
+  async environment(agent: Agent | undefined, tool: string): Promise<Readonly<Record<string, string>> | undefined> {
+    return await this.engine.environment(agent, tool)
+  }
+
+  /**
+   * Retain native forwarding and capture under the executing conversation.
+   * @param agent - Executing Agent; absence acquires nothing.
+   * @param tool - Traffic attribution.
+   * @param stop - Join delegated resources after cancellation.
+   * @param signal - Caller lifetime.
+   * @param admission - Optional cancellation during startup only; omitted for caller lifetime alone.
+   * @returns Covered execution lease, or undefined outside enabled Security mode.
+   */
+  async openEgress(
+    agent: Agent | undefined, tool: string, stop: () => Promise<void>, signal: AbortSignal, admission?: AbortSignal,
+  ): Promise<SecurityProxyEgressLease | undefined> {
+    return await this.engine.openEgress(agent, tool, stop, signal, admission)
+  }
+
+  /**
+   * Issue a sidebar-browser endpoint using the Host-resolved conversation and recorded mode.
+   * @param agent - Agent resolved by the ordinary Session resource loader.
+   * @returns A credential-free local endpoint, or undefined outside enabled Security mode.
+   */
+  @Remote
+  async browserEnvironment(agent: Agent): Promise<string | undefined> {
+    this.assertOwner('securityProxy/browserEnvironment')
+    const environment = await this.engine.environment(agent, 'sidebar_browser')
+    if (environment === undefined) return undefined
+    if (environment.HTTP_PROXY === undefined) throw new Error('Security proxy did not provide a browser endpoint')
+    return environment.HTTP_PROXY
+  }
+
+  /**
+   * Bind public certificate material to the owner-requested conversation and current listener.
+   * @param agent - Agent resolved by the ordinary Session resource loader.
+   * @param server - Exact loopback endpoint already issued for this browser.
+   * @returns Public PEM for an inspected listener, or null for an opaque listener.
+   */
+  @Remote
+  async browserTrust(agent: Agent, server: string): Promise<string | null> {
+    this.assertOwner('securityProxy/browserTrust')
+    const certificate = await this.engine.issuedCertificate(agent, 'sidebar_browser', server)
+    if (certificate === undefined) {
+      throw new RemoteError('security-proxy/browser-route-changed', 'The browser proxy route changed. Reopen the page to use the current route.', {})
+    }
+    return certificate
+  }
+
+  /**
+   * Retrieve one target through the proxy with full plaintext capture.
+   * @param agent - the executing Agent.
+   * @param url - the absolute HTTP(S) target.
+   * @param signal - caller cancellation.
+   * @returns the decoded response.
+   */
+  async fetchTarget(agent: Agent | undefined, url: string, signal: AbortSignal): Promise<WebFetchResult> {
+    return await this.engine.fetchTarget(agent, url, signal)
+  }
+
+  /**
+   * Read the whole settings and status surface.
+   * @returns current state.
+   */
+  @Remote
+  async get(): Promise<SecurityProxyState> {
+    return await this.engine.state()
+  }
+
+  /**
+   * Change settings; transport changes are re-verified before this resolves.
+   * @param patch - owner-edited fields.
+   * @returns state after the write.
+   */
+  @Remote
+  async configure(patch: SecurityProxySettingsPatch): Promise<SecurityProxyState> {
+    this.assertOwner('securityProxy/configure')
+    const before = await this.engine.state()
+    const after = await this.engine.configure(patch)
+    if ((['enabled', 'protocol', 'host', 'port', 'authEnabled', 'username'] as const)
+      .some(key => before.settings[key] !== after.settings[key])) this.transportChanged()
+    return after
+  }
+
+  /**
+   * Store or remove the upstream password.
+   * @param password - the new secret, or null to remove the record.
+   * @returns state after the write.
+   */
+  @Remote
+  async setPassword(password: string | null): Promise<SecurityProxyState> {
+    this.assertOwner('securityProxy/setPassword')
+    const state = await this.engine.setPassword(password)
+    this.transportChanged()
+    return state
+  }
+
+  /**
+   * Run one real proxy-path check.
+   * @returns the check outcome and the state after it.
+   */
+  @Remote
+  async test(): Promise<SecurityProxyTestResult> {
+    this.assertOwner('securityProxy/test')
+    return await this.engine.test()
+  }
+
+  /**
+   * List retained flows for the application owner, newest first.
+   * @param query - optional filters.
+   * @returns matching rows and the capture counters.
+   */
+  @Remote
+  async list(query: SecurityProxyFlowQuery): Promise<SecurityProxyFlowsResult> {
+    this.assertOwner('securityProxy/list')
+    const state = await this.engine.state()
+    return { flows: this.engine.list(query), capture: state.capture }
+  }
+
+  /**
+   * Read one flow's detail for the application owner.
+   * @param id - flow identity.
+   * @returns the detail, or null when pruned or unknown.
+   */
+  @Remote
+  async detail(id: string): Promise<SecurityProxyFlowDetail | null> {
+    this.assertOwner('securityProxy/detail')
+    return Promise.resolve(this.engine.detail(id))
+  }
+
+  /**
+   * Export all matching stored records for the application owner.
+   * @param query - Session, kind and text filters without pagination.
+   * @returns Complete stored snapshot; oversized exports fail without returning records.
+   */
+  @Remote
+  async exportCapture(query: SecurityProxyExportQuery): Promise<SecurityProxyCaptureExport> {
+    this.assertOwner('securityProxy/exportCapture')
+    const result = this.engine.exportCapture(query)
+    if (result.kind === 'too-large') {
+      throw new RemoteError('security-proxy/export-too-large', 'The capture export exceeds the configured byte budget.',
+        { maxBytes: result.maxBytes })
+    }
+    return Promise.resolve(result.data)
+  }
+
+  /**
+   * Drop every retained flow.
+   * @returns the capture counters after clearing.
+   */
+  @Remote
+  async clear(): Promise<SecurityProxyCaptureStats> {
+    this.assertOwner('securityProxy/clear')
+    this.engine.clear()
+    return (await this.engine.state()).capture
+  }
+
+  /**
+   * Pause or resume capture; forwarding continues either way.
+   * @param paused - whether new flows are refused.
+   * @returns state after the change.
+   */
+  @Remote
+  async pause(paused: boolean): Promise<SecurityProxyState> {
+    this.assertOwner('securityProxy/pause')
+    return await this.engine.setPaused(paused)
+  }
+
+  /**
+   * Refuse an owner-only operation from a delegated Remote peer.
+   * @param action - the attempted Remote method.
+   */
+  private assertOwner(action: string): void {
+    if (principalOf(this.ctx.invocation) !== undefined) {
+      throw new RemoteError('security-proxy/owner-required', 'This security proxy operation requires the application owner.', { action })
+    }
+  }
+
+  private transportChanged(): void {
+    try { this.ctx.emit('security-proxy/transport-changed') }
+    catch (error) { this.ctx.logger.warn('Browser proxy notification failed; reopen browser tabs before continuing.', error) }
+  }
+}

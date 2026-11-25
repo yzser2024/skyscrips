@@ -1,0 +1,13 @@
+version: 1
+scenario: office-sidecar-instructions
+profile: headless
+composition: office-sidecar-instructions
+recording: authored
+header:
+  class: office-sidecar-instructions
+  pin: true
+workspace:
+  setup: office-skills
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

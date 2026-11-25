@@ -1,0 +1,54 @@
+- banner:
+  - navigation "Session hierarchy": Markdown image policy
+  - button "Side question"
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: Show the Markdown image policy. {{clock}}
+- button "Copy"
+- status: Completed
+- button "Completed in {{duration}}" [disabled]
+- heading "Markdown images" [level=2]
+- paragraph:
+  - 'button "View full image: Remote test image"':
+    - img "Remote test image"
+- paragraph:
+  - 'button "View full image: Local test image"':
+    - img "Local test image"
+- paragraph:
+  - 'button "View full image: Workspace test image"':
+    - img "Workspace test image"
+- paragraph:
+  - button "View comparison"
+- paragraph:
+  - 'button "View full image: Space path"':
+    - img "Space path"
+- paragraph:
+  - 'button "View full image: Encoded path"':
+    - img "Encoded path"
+- paragraph:
+  - 'button "View full image: Encoded filename"':
+    - img "Encoded filename"
+- paragraph: Image preview unavailable · Oversized image
+- paragraph:
+  - 'button "View full image: Outside workspace image"':
+    - img "Outside workspace image"
+- paragraph: Image preview unavailable · Missing image
+- paragraph: Image preview unavailable · {{cwd}}/corrupt.png
+- paragraph: REMOTE_IMAGE_DONE
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Full access"': Full access
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]
+- 'button "Turns: 1 · Steps: 1"'
+- 'button "Conversation cost: ￥0.00"': ￥0.00
+- 'button "Spending limits: Off"': "Off"

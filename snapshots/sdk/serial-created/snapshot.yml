@@ -1,0 +1,14 @@
+version: 1
+scenario: serial-created
+profile: sdk
+permission: workspace-write
+composition: sdk-serial-created
+recording: authored
+header:
+  class: sdk-serial-created
+  pin: true
+  systemPromptSource: text-turn
+  toolSchemasSource: session/text-turn
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

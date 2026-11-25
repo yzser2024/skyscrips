@@ -1,0 +1,35 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    { "path": "../../memory/memory" },
+    { "path": "../../session-query/session-query" },
+    { "path": "../../llm/llm-retry" },
+    { "path": "../../core/agent" },
+    { "path": "../../core/session" },
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../llm/llm"
+    },
+    {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../../typert/protocol"
+    },
+    {
+      "path": "../../web/web-search-deepseek"
+    }
+  ]
+}

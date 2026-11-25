@@ -1,0 +1,11 @@
+version: 1
+scenario: mcp-resources
+profile: headless
+composition: mcp-resources
+recording: live
+header:
+  class: mcp-resources
+  pin: true
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

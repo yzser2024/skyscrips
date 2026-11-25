@@ -1,0 +1,3 @@
+- text: Input device
+- button "Input device": Fake Audio Input 1
+- img "Microphone input level"

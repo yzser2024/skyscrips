@@ -1,0 +1,26 @@
+- banner:
+  - navigation "Session hierarchy": Reply with a one-sentence description
+  - 'button "Conversation mode: Default" [disabled]': Default
+  - button "Side question"
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: Reply with a one-sentence description of event sourcing, then stop. {{clock}}
+- button "Copy"
+- button "Context injection runtime-context"
+- button "Context injection skill-catalog"
+- button "Context injection time-context"
+- paragraph: partial
+- status: Deep diving
+- text: Deep diving for {{duration}} ···
+- textbox "Message or run a task, / commands, @ files or sessions":
+  - paragraph: Queue this follow-up while the current turn is running.
+- button "Add files or run commands"
+- 'button "Access mode, current: Full access"': Full access
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Queue message"
+- 'button "Conversation cost: ￥0.00"': ￥0.00
+- 'button "Spending limits: Off"': "Off"

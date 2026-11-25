@@ -1,0 +1,16 @@
+version: 1
+scenario: subagent-continuable-inheritance
+profile: sdk
+permission: danger-full-access
+composition: subagent-continuable-inheritance
+recording: authored
+header:
+  class: subagent-continuable-inheritance
+  pin: true
+  systemPromptSource: session/text-turn
+  toolSchemasSource: session/text-turn
+  childSystemPrompts: [1]
+  childToolSchemas: [1]
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

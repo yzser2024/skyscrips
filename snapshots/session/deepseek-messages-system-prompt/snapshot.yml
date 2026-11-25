@@ -1,0 +1,15 @@
+version: 1
+scenario: deepseek-messages-system-prompt
+profile: headless
+composition: deepseek-messages-system-prompt
+recording: authored
+header:
+  class: deepseek-messages-system-prompt
+  pin: true
+  toolSchemasSource: text-turn
+  promptChanges: 1
+replay:
+  override: true
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

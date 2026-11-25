@@ -1,0 +1,27 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    { "path": "../../settings/settings" },
+    { "path": "../../session-query/session-query" },
+    { "path": "../../session/session-persistence" },
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../remote-access/tsconfig.host.json"
+    },
+    {
+      "path": "../../memory/memory"
+    },
+    {
+      "path": "../../typert/protocol"
+    }
+  ]
+}

@@ -1,0 +1,190 @@
+/** Materialize the complete production runtime before publishing Desktop resources. */
+
+import { resolveMacOSSignatureCacheDirectory } from './macos-signature-cache-directory.mjs'
+import { packagingStep } from './packaging-step.mjs'
+import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, join, relative, resolve } from 'node:path'
+import { desktopNodeEnvironment } from '../src/node-environment.ts'
+import { createRuntimeProjectMetadata } from '../src/project-manager.ts'
+import { readPreparedDesktopRelease } from './prepare-runtime-release.ts'
+import {
+  DESKTOP_HOST_PACKAGE,
+  DESKTOP_HOST_RUNTIME_FILES,
+  DESKTOP_PACKAGES_DIR,
+  DESKTOP_PACKAGE_SET_FILE,
+  readDesktopCorePackageSet,
+  verifyDesktopCoreLockfile,
+} from '../src/core-package-set.ts'
+import { smokePrimaryRuntime } from './prepare-primary-runtime.ts'
+import { smokePreparedRuntime } from './smoke-prepared-runtime.ts'
+import { prepareRuntimeManifests } from './prepare-runtime-manifests.ts'
+import { prepareRuntimeNotices } from './runtime-notices.ts'
+import { prepareWindowsPty } from './prepare-windows-pty.ts'
+import { prepareRuntimePatches, verifyRuntimePatches } from './prepare-runtime-patches.ts'
+import { prepareRuntimeLockfile, verifyRuntimeLockfile } from './prepare-runtime-lockfile.ts'
+import { writeDesktopRuntime, writeDesktopRuntimeAsync, verifyDesktopRuntime } from '../src/runtime-tree.ts'
+import {
+  resolveDesktopAppId,
+  resolveMacOSSigningEnvironment,
+  resolveNpmRegistry,
+} from './desktop-release-environment.mjs'
+import {
+  signMacOSRuntime,
+} from './macos-runtime.ts'
+import { desktopTargetPlatform, resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
+import { desktopRuntimeFileExclusion } from './runtime-file-policy.ts'
+import { selectOfficeEngine } from '../../../scripts/libreoffice-packages.mjs'
+
+const APP_ROOT = resolve(import.meta.dirname, '..')
+const BUILD_PATHS = resolveDesktopTargetBuildPaths()
+const DSH_OUTPUT_ROOT = BUILD_PATHS.dsh
+const BUILD_ROOT = mkdtempSync(join(tmpdir(), 'dsh-desktop-runtime-'))
+const STORE_ROOT = BUILD_PATHS.pnpmStore
+const RUNTIME_ROOT = BUILD_PATHS.runtime
+const PNPM_BUILD_STATE = BUILD_PATHS.dshPnpm
+const PACKAGE_SET_ROOT = BUILD_PATHS.packageSet
+const NODE = join(BUILD_PATHS.electron, process.platform === 'win32' ? 'electron.exe'
+  : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron')
+const PNPM = join(RUNTIME_ROOT, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs')
+
+function runPnpm(args: readonly string[]): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    const [command, ...commandArgs] = args
+    if (command === undefined) throw new Error('desktop runtime: pnpm command is required')
+    const registry = resolveNpmRegistry(process.env)
+    const config = join(PNPM_BUILD_STATE, 'config')
+    const userConfig = join(config, 'npmrc')
+    mkdirSync(config, { recursive: true })
+    writeFileSync(userConfig, '')
+    const child = spawn(NODE, [
+      '--expose-internals',
+      PNPM,
+      `--config.registry=${registry}`,
+      `--config.store-dir=${STORE_ROOT}`,
+      '--config.verify-store-integrity=true',
+      '--config.package-import-method=copy',
+      '--config.enable-global-virtual-store=false',
+      `--config.userconfig=${userConfig}`,
+      command,
+      ...commandArgs,
+    ], {
+      cwd: BUILD_ROOT,
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => (
+          name !== 'NODE_OPTIONS' && name !== 'NODE_PATH' && !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
+        ))),
+        NPM_CONFIG_REGISTRY: registry,
+        NPM_CONFIG_STORE_DIR: STORE_ROOT,
+        NPM_CONFIG_USERCONFIG: userConfig,
+        ...desktopNodeEnvironment(NODE, join(RUNTIME_ROOT, 'bin'), {}),
+        PATH: `${join(RUNTIME_ROOT, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+        XDG_CACHE_HOME: join(PNPM_BUILD_STATE, 'cache'),
+        XDG_CONFIG_HOME: config,
+        XDG_STATE_HOME: join(PNPM_BUILD_STATE, 'state'),
+      },
+      stdio: 'inherit',
+    })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop runtime: pnpm exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+async function main(): Promise<void> {
+  try {
+    console.log(`desktop runtime: pnpm store ${STORE_ROOT}`)
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:reset', async () => {
+      rmSync(DSH_OUTPUT_ROOT, { recursive: true, force: true })
+      rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
+      mkdirSync(STORE_ROOT, { recursive: true })
+    })
+    const release = readPreparedDesktopRelease(APP_ROOT, RUNTIME_ROOT, process.env)
+    const patches = await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:stage-packages', async () => {
+      copyFileSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGE_SET_FILE), join(BUILD_ROOT, DESKTOP_PACKAGE_SET_FILE))
+      cpSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGES_DIR), join(BUILD_ROOT, DESKTOP_PACKAGES_DIR), { recursive: true })
+      createRuntimeProjectMetadata(BUILD_ROOT, release)
+      return prepareRuntimePatches(BUILD_ROOT, resolve(APP_ROOT, '..', '..'))
+    })
+    const packageSet = readDesktopCorePackageSet(BUILD_ROOT, release.engineVersion)
+    const targetName = resolveDesktopBuildTarget()
+    const target = desktopTargetPlatform(targetName)
+    const resolution = prepareRuntimeLockfile(BUILD_ROOT, resolve(APP_ROOT, '..', '..'), packageSet, target)
+    console.log(`desktop runtime: source lockfile sha256 ${resolution.sourceSha256}`)
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:lockfile', () => runPnpm(['install', '--lockfile-only', '--no-frozen-lockfile']))
+    verifyRuntimePatches(BUILD_ROOT, patches)
+    verifyRuntimeLockfile(BUILD_ROOT, resolution)
+    const lockfile = readFileSync(join(BUILD_ROOT, 'pnpm-lock.yaml'), 'utf8')
+    console.log(`desktop runtime: lockfile sha256 ${createHash('sha256').update(lockfile).digest('hex')}`)
+    verifyDesktopCoreLockfile(
+      lockfile,
+      readDesktopCorePackageSet(BUILD_ROOT, release.engineVersion),
+    )
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:install', () => runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile']))
+    const modules = join(BUILD_ROOT, 'node_modules')
+    if (target.platform === 'win32') {
+      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:windows-pty',
+        () => prepareWindowsPty(join(modules, 'node-pty'), NODE, join(RUNTIME_ROOT, 'bin'), release.nodeVersion, target.arch))
+    }
+    const officeManifest = JSON.parse(readFileSync(join(modules, '@deepseek-ai/libreoffice-kit/package.json'), 'utf8'))
+    const officeEngine = selectOfficeEngine(officeManifest, target)
+    mkdirSync(DSH_OUTPUT_ROOT, { recursive: true })
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:materialize-modules', async () => {
+      cpSync(modules, join(DSH_OUTPUT_ROOT, 'node_modules'), {
+        recursive: true, dereference: true,
+        filter: source => desktopRuntimeFileExclusion(relative(modules, source), target, officeEngine) === undefined,
+      })
+    })
+    writeFileSync(join(DSH_OUTPUT_ROOT, 'package.json'), `${JSON.stringify({
+      name: '@deepseek-ai/dsh-desktop-runtime', private: true, version: release.version, type: 'module',
+      dependencies: Object.fromEntries(packageSet.packages.map(entry => [entry.name, entry.version])),
+    }, undefined, 2)}\n`)
+    for (const file of DESKTOP_HOST_RUNTIME_FILES) {
+      if (!existsSync(join(DSH_OUTPUT_ROOT, 'node_modules', DESKTOP_HOST_PACKAGE, file))) {
+        throw new Error(`desktop runtime: missing private Host file ${file}`)
+      }
+    }
+    if (!existsSync(join(DSH_OUTPUT_ROOT, 'node_modules', '@deepseek-ai', `libreoffice-kit-${officeEngine}`, 'prebuilds.json'))) {
+      throw new Error(`desktop runtime: missing required LibreOffice engine ${officeEngine}`)
+    }
+    if (process.platform === 'darwin' && process.env.DSH_DESKTOP_UNSIGNED !== '1') {
+      const cacheDirectory = resolveMacOSSignatureCacheDirectory(process.env, BUILD_PATHS.root)
+      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:dsh-native', () => signMacOSRuntime(DSH_OUTPUT_ROOT, resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env), target.arch, cacheDirectory))
+      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:primary-native', () => signMacOSRuntime(join(RUNTIME_ROOT, 'primary-runtime'), resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env), target.arch, cacheDirectory, 'primary'))
+    }
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:manifests', () => prepareRuntimeManifests(DSH_OUTPUT_ROOT, release.version))
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:notices', async () => {
+      const packages = await prepareRuntimeNotices(DSH_OUTPUT_ROOT)
+      const pending = packages.filter(pkg => pkg.reviewRequired)
+      console.log(`desktop notices: ${packages.length} packages, ${pending.length} require notice review`)
+    })
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:primary-smoke', async () => smokePrimaryRuntime(join(RUNTIME_ROOT, 'primary-runtime')))
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:write-descriptor', async () => {
+      const writeRuntime = target.platform === 'win32' ? writeDesktopRuntimeAsync : writeDesktopRuntime
+      return writeRuntime(DSH_OUTPUT_ROOT, release, packageSet.packages.map(entry => entry.name), target)
+    })
+    const descriptor = await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:verify-before-smoke', () => verifyDesktopRuntime(DSH_OUTPUT_ROOT, release.version, target))
+    if (!process.argv.includes('--defer-runtime-smoke')) {
+      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:smoke', () => smokePreparedRuntime(DSH_OUTPUT_ROOT, NODE, RUNTIME_ROOT, descriptor))
+      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:verify-after-smoke', () => verifyDesktopRuntime(DSH_OUTPUT_ROOT, release.version, target))
+    }
+  } catch (error) {
+    rmSync(DSH_OUTPUT_ROOT, { recursive: true, force: true })
+    throw error
+  } finally {
+    let cleaned = false
+    const cleanup = (): void => {
+      try { rmSync(BUILD_ROOT, { recursive: true, force: true }) }
+      finally { rmSync(PNPM_BUILD_STATE, { recursive: true, force: true }) }
+      cleaned = true
+    }
+    try { await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:cleanup', async () => cleanup()) }
+    finally { if (!cleaned) cleanup() }
+  }
+}
+
+await main()

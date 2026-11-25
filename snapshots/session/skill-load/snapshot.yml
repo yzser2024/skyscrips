@@ -1,0 +1,13 @@
+version: 1
+scenario: skill-load
+profile: headless
+composition: default
+recording: authored
+header:
+  class: skill
+  pin: true
+  systemPromptSource: text-turn
+  toolSchemasSource: text-turn
+sessionFormat:
+  version: 4
+  coverage: [behavior-update]

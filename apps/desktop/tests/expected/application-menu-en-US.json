@@ -1,0 +1,43 @@
+[
+  {
+    "label": "About DeepSeek Harness Uncensored"
+  },
+  {
+    "type": "separator"
+  },
+  {
+    "label": "Check for Updates…"
+  },
+  {
+    "label": "Manage dsh-uncensored Command…"
+  },
+  {
+    "type": "separator"
+  },
+  {
+    "role": "toggleDevTools",
+    "label": "Developer tools"
+  },
+  {
+    "type": "separator"
+  },
+  {
+    "role": "hide",
+    "label": "Hide DeepSeek Harness Uncensored"
+  },
+  {
+    "role": "hideOthers",
+    "label": "Hide Others"
+  },
+  {
+    "role": "unhide",
+    "label": "Show All"
+  },
+  {
+    "type": "separator"
+  },
+  {
+    "role": "quit",
+    "label": "Quit DeepSeek Harness Uncensored"
+  }
+]

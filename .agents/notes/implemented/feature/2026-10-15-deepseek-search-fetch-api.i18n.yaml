@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for 2026-10-15-deepseek-search-fetch-api.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-15-deepseek-search-fetch-api.md
+/agent-note-direct-deepseek-search-and-fetch-apis:
+  en: fb19be7e7fc65810
+  zh: 865aaed5b7f802cc
+/agent-note-direct-deepseek-search-and-fetch-apis/problem:
+  en: d1aad580a4db9872
+  zh: 1eb3bac59353291d
+/agent-note-direct-deepseek-search-and-fetch-apis/decision:
+  en: 43298ccae4f7a6d4
+  zh: eb7ef46b6f290c15
+/agent-note-direct-deepseek-search-and-fetch-apis/decision/protocol-selection-and-deployment:
+  en: b07c0667e25927aa
+  zh: 45eda3e151040201
+/agent-note-direct-deepseek-search-and-fetch-apis/decision/search-results-and-model-input:
+  en: a95618f172ef63ee
+  zh: 306556be09c56bdf
+/agent-note-direct-deepseek-search-and-fetch-apis/decision/fetch-metadata-and-ownership:
+  en: 8051417b08739ed0
+  zh: c11d35a346014436
+/agent-note-direct-deepseek-search-and-fetch-apis/decision/default-migration:
+  en: 9b1e46885451ada3
+  zh: 0deab76a188294dd
+/agent-note-direct-deepseek-search-and-fetch-apis/decision/legacy-messages-search:
+  en: 2e0c8a76feb2e790
+  zh: dab0721397c9fb34
+/agent-note-direct-deepseek-search-and-fetch-apis/alternatives-considered:
+  en: a7ca765e49cac918
+  zh: 7fea65e16608baf6
+/agent-note-direct-deepseek-search-and-fetch-apis/consequences:
+  en: 7ec21c5b1124e5f8
+  zh: af769dbdb4face9f
+/agent-note-direct-deepseek-search-and-fetch-apis/verification-and-remaining-api-adoption:
+  en: e09b396a23edc84b
+  zh: 37eb9d3d84e23356
