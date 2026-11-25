@@ -112,8 +112,12 @@ jobs:
             echo "WARN: release:pack vendor failed (may be unnecessary)"
 
           echo "--- native/system build:ts + pack -> packed/landlock"
-          pnpm --dir native/system run build:ts 2>&1 | tail -10
-          pnpm --dir native/system/packages/entry pack --pack-destination "$PACKED/landlock" 2>&1 | tail -5
+          pnpm --dir native/system run build:ts
+          echo "build:ts exit=$?"
+          ls -la native/system/packages/entry/lib 2>/dev/null | head -10 || echo "entry/lib missing"
+          pnpm --dir native/system/packages/entry pack --pack-destination "$PACKED/landlock"
+          echo "entry pack exit=$?"
+          ls -la "$PACKED/landlock"
 
           echo "=== packed contents ==="
           for d in dsh vendor landlock; do
