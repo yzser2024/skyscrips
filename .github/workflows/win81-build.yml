@@ -190,13 +190,55 @@ jobs:
           cp -r lib/welcome/. "$ROOT/lib/welcome/"
           cp -r renderer "$ROOT/renderer"
           cp package.json "$ROOT/package.json"
+
+          # prepare-dsh.ts already materialised dsh/ with dereference:true
+          # (prepare-dsh.ts:137-140), so this tree holds real files, not pnpm
+          # symlinks. Verify that before copying, since a link farm would make
+          # the asar silently incomplete.
+          LINK_COUNT=$(find "$DSH_DIR" -type l 2>/dev/null | wc -l)
+          echo "symlinks under dsh/: $LINK_COUNT"
+          if [ "$LINK_COUNT" -gt 0 ]; then
+            echo "::error::dsh/ contains $LINK_COUNT symlinks; expected a materialised tree"
+            find "$DSH_DIR" -type l 2>/dev/null | head -10
+            exit 1
+          fi
           (cd "$DSH_DIR" && tar cf - .) | (cd "$ROOT/dsh" && tar xf -)
 
-          # Top-level node_modules: production runtime deps of the desktop app
-          # itself. A real package ships one (8.1 MB, 1129 files).
+          # Top-level node_modules: the desktop app's own production deps
+          # (electron-updater etc). A real package ships one (8.1 MB / 1129 files).
+          # apps/desktop/node_modules is a pnpm link farm, so a plain `tar` copy
+          # breaks every symlink (they point ../../node_modules/.pnpm/...).
+          # Dereference into real files instead, and skip build-only packages.
           if [ -d node_modules ]; then
-            mkdir -p "$ROOT/node_modules"
-            (cd node_modules && tar cf - .) | (cd "$ROOT/node_modules" && tar xf -)
+            node -e '
+              const fs = require("node:fs");
+              const path = require("node:path");
+              const src = "node_modules";
+              const dst = ".asar-root/node_modules";
+              const skip = new Set(["electron","electron-builder","app-builder-lib","builder-util",
+                "builder-util-runtime","electron-winstaller","@electron","electron-publish",
+                "@electron/notarize","@electron/universal","@electron/asar","node-gyp","pnpm",
+                "react","react-dom","vite","typescript","@types"]);
+              fs.mkdirSync(dst, { recursive: true });
+              let copied = 0;
+              for (const name of fs.readdirSync(src)) {
+                const base = name.startsWith("@") ? null : name;
+                if (base && skip.has(base)) continue;
+                const from = path.join(src, name);
+                if (name.startsWith("@")) {
+                  fs.mkdirSync(path.join(dst, name), { recursive: true });
+                  for (const sub of fs.readdirSync(from)) {
+                    if (skip.has(name + "/" + sub)) continue;
+                    fs.cpSync(path.join(from, sub), path.join(dst, name, sub), { recursive: true, dereference: true });
+                    copied++;
+                  }
+                } else {
+                  fs.cpSync(from, path.join(dst, name), { recursive: true, dereference: true });
+                  copied++;
+                }
+              }
+              console.log("top-level node_modules packages copied:", copied);
+            '
           fi
 
           find "$ROOT/dsh" -type f \( -name '*.js.map' -o -name '*.cjs.map' -o -name '*.mjs.map' -o -name '*.tsbuildinfo' \) -delete || true
