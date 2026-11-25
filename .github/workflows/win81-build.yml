@@ -128,11 +128,29 @@ jobs:
           pnpm exec tsx apps/desktop/scripts/prepare-runtime.ts --defer-primary-runtime-smoke 2>&1 | tee prepare-runtime.log
 
       # prepare:packages consumes packed/* and emits the package set.
+      #
+      # packed/landlock holds @deepseek-ai/node-addon-system (the Linux Landlock
+      # launcher). Its optionalDependencies list only darwin/linux variants, so on
+      # win32 pnpm packs nothing into that directory and prepare:packages would
+      # abort on the empty input ("contains no tarballs"). selectDesktopPackageClosure
+      # only recurses into optional deps that are actually present (line 94), so
+      # omitting the landlock input is safe for a Windows payload. Prefer it when
+      # the directory is empty and fall back to the default inputs otherwise.
       - name: Prepare package set
         shell: bash
         run: |
           set -o pipefail
-          pnpm exec tsx apps/desktop/scripts/prepare-package-set.ts 2>&1 | tee prepare-packages.log
+          PACKED_DIR=apps/desktop/.desktop-build/targets/win-x64/packed
+          LANDLOCK_COUNT=$(ls -1 "$PACKED_DIR/landlock" 2>/dev/null | wc -l)
+          echo "packed/landlock entries: $LANDLOCK_COUNT"
+          if [ "$LANDLOCK_COUNT" -gt 0 ]; then
+            pnpm exec tsx apps/desktop/scripts/prepare-package-set.ts 2>&1 | tee prepare-packages.log
+          else
+            echo "landlock has no tarballs (expected on win32); passing explicit --from"
+            pnpm exec tsx apps/desktop/scripts/prepare-package-set.ts \
+              --from "$PACKED_DIR/dsh" \
+              --from "$PACKED_DIR/vendor" 2>&1 | tee prepare-packages.log
+          fi
 
       # prepare:dsh materialises targets/win-x64/dsh/ (this is the asar payload).
       - name: Prepare dsh closure
