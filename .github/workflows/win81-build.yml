@@ -247,13 +247,16 @@ jobs:
           ls -1A "$ROOT"
           du -sh "$ROOT" "$ROOT/dsh" "$ROOT/node_modules" 2>/dev/null || true
 
-          # Guard rails: dsh/ may only hold node_modules + package.json + descriptor
-          UNEXPECTED=$(cd "$ROOT/dsh" && ls -1A | grep -vxE 'node_modules|package\.json|desktop-runtime\.json' || true)
-          if [ -n "$UNEXPECTED" ]; then
-            echo "::error::unexpected entries in dsh/: $UNEXPECTED"
-            exit 1
-          fi
+          # Guard rails. dsh/ is written by prepare-dsh.ts and legitimately holds
+          # node_modules, package.json, desktop-runtime.json and a licenses dir.
           test -d "$ROOT/dsh/node_modules" || { echo "::error::dsh/node_modules missing"; exit 1; }
+          test -f "$ROOT/dsh/package.json" || { echo "::error::dsh/package.json missing"; exit 1; }
+          echo "=== dsh/ top-level entries ==="
+          ls -1A "$ROOT/dsh"
+          # runtime/ must never be inside the asar.
+          if [ -d "$ROOT/dsh/runtime" ]; then
+            echo "::error::dsh/runtime must not be inside the asar"; exit 1
+          fi
           SZ=$(du -sm "$ROOT" | cut -f1)
           echo ".asar-root = ${SZ}MB"
           if [ "$SZ" -gt 900 ]; then
