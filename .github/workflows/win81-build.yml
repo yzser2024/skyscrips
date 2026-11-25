@@ -100,30 +100,34 @@ jobs:
           set -o pipefail
           PACKED=apps/desktop/.desktop-build/targets/win-x64/packed
           mkdir -p "$PACKED/dsh" "$PACKED/vendor" "$PACKED/landlock"
+          # pnpm resolves --pack-destination relative to the package directory, so
+          # every destination below must be absolute or the tarballs land under
+          # the package's own tree instead of packed/.
+          ABS_DSh="$PWD/$PACKED/dsh"
+          ABS_VENDOR="$PWD/$PACKED/vendor"
+          ABS_LANDLOCK="$PWD/$PACKED/landlock"
 
           echo "--- pack-local-packages -> packed/dsh"
-          pnpm exec tsx apps/desktop/scripts/pack-local-packages.ts --out "$PACKED/dsh" 2>&1 | tail -20
+          pnpm exec tsx apps/desktop/scripts/pack-local-packages.ts --out "$ABS_DSh"
 
           echo "--- desktop-host pack -> packed/dsh"
-          pnpm --dir apps/desktop-host pack --pack-destination "$PACKED/dsh" 2>&1 | tail -5
+          pnpm --dir apps/desktop-host pack --pack-destination "$ABS_DSh"
 
           echo "--- release:pack vendor -> packed/vendor"
-          pnpm run release:pack --family vendor --out "$PACKED/vendor" 2>&1 | tail -10 || \
-            echo "WARN: release:pack vendor failed (may be unnecessary)"
+          pnpm run release:pack --family vendor --out "$ABS_VENDOR"
 
           echo "--- native/system build:ts + pack -> packed/landlock"
           pnpm --dir native/system run build:ts
-          # pnpm resolves --pack-destination relative to the package directory, so
-          # pass an absolute path or the tarball lands under packages/entry/.
-          PACKED_LANDLOCK="$PWD/$PACKED/landlock"
-          echo "packing entry to: $PACKED_LANDLOCK"
-          pnpm --dir native/system/packages/entry pack --pack-destination "$PACKED_LANDLOCK"
-          ls -la "$PACKED_LANDLOCK"
+          pnpm --dir native/system/packages/entry pack --pack-destination "$ABS_LANDLOCK"
 
           echo "=== packed contents ==="
           for d in dsh vendor landlock; do
             echo "  [$d] $(ls -1 "$PACKED/$d" 2>/dev/null | wc -l) files"
           done
+          echo "=== verify desktop-host tarball present ==="
+          ls -1 "$ABS_DSh" | grep -i 'desktop-host' || echo "MISSING desktop-host tarball"
+          echo "=== verify node-addon-system tarball present ==="
+          ls -1 "$ABS_LANDLOCK" | grep -i 'node-addon-system' || echo "MISSING node-addon-system tarball"
 
       # prepare:runtime downloads the Electron host used to run pnpm install.
       # prepare.ts uses bare Node fetch with no proxy/mirror support, and the
