@@ -113,11 +113,12 @@ jobs:
 
           echo "--- native/system build:ts + pack -> packed/landlock"
           pnpm --dir native/system run build:ts
-          echo "build:ts exit=$?"
-          ls -la native/system/packages/entry/lib 2>/dev/null | head -10 || echo "entry/lib missing"
-          pnpm --dir native/system/packages/entry pack --pack-destination "$PACKED/landlock"
-          echo "entry pack exit=$?"
-          ls -la "$PACKED/landlock"
+          # pnpm resolves --pack-destination relative to the package directory, so
+          # pass an absolute path or the tarball lands under packages/entry/.
+          PACKED_LANDLOCK="$PWD/$PACKED/landlock"
+          echo "packing entry to: $PACKED_LANDLOCK"
+          pnpm --dir native/system/packages/entry pack --pack-destination "$PACKED_LANDLOCK"
+          ls -la "$PACKED_LANDLOCK"
 
           echo "=== packed contents ==="
           for d in dsh vendor landlock; do
@@ -125,11 +126,26 @@ jobs:
           done
 
       # prepare:runtime downloads the Electron host used to run pnpm install.
+      # prepare.ts uses bare Node fetch with no proxy/mirror support, and the
+      # python-build-standalone archive comes from a GitHub Release, so transient
+      # network failures are expected. Retry with a longer timeout.
       - name: Prepare runtime (electron host + primary runtime)
         shell: bash
         run: |
           set -o pipefail
-          pnpm exec tsx apps/desktop/scripts/prepare-runtime.ts --defer-primary-runtime-smoke 2>&1 | tee prepare-runtime.log
+          export DSH_RESOURCE_DOWNLOAD_TIMEOUT_MS=600000
+          for attempt in 1 2 3; do
+            echo "=== prepare:runtime attempt $attempt ==="
+            if pnpm exec tsx apps/desktop/scripts/prepare-runtime.ts --defer-primary-runtime-smoke 2>&1 | tee prepare-runtime.log; then
+              echo "prepare:runtime succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "attempt $attempt failed; tail of log:"
+            tail -30 prepare-runtime.log || true
+            if [ "$attempt" -lt 3 ]; then sleep 20; fi
+          done
+          echo "::error::prepare:runtime failed after 3 attempts"
+          exit 1
 
       # prepare:packages consumes packed/* and emits the package set.
       #
