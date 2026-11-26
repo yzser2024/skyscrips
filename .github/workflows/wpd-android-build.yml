@@ -49,34 +49,85 @@ jobs:
             -o /tmp/wpd-patch.zip \
             "https://api.github.com/repos/$REPO/releases/assets/$AID"
           ls -lh /tmp/wpd-patch.zip
-          python3 -c "import zipfile;print('entries',len(zipfile.ZipFile('/tmp/wpd-patch.zip').namelist()))"
 
       - name: Clone upstream
         run: |
           git clone --quiet https://github.com/GabriWar/warpedpd.git /tmp/warpedpd
           cd /tmp/warpedpd
-          git checkout -q "${{ inputs.upstream_commit }}" || echo "WARN: commit not found, stay on default"
+          git checkout -q "${{ inputs.upstream_commit }}" || echo "WARN: commit not found"
           echo "HEAD=$(git rev-parse --short HEAD)"
-          ls -a | head -30
 
       - name: Apply patch
         shell: bash
         run: |
           mkdir -p /tmp/patch && unzip -q /tmp/wpd-patch.zip -d /tmp/patch
           SRC=$(find /tmp/patch -maxdepth 4 -type d -name warped-core-src | head -1)
-          echo "SRC=$SRC"
           test -d "$SRC/core/src/main/java" || { echo "patch structure invalid"; exit 1; }
           cp -a "$SRC/core/src/main/." /tmp/warpedpd/core/src/main/
-          echo "--- after copy ---"
-          ls /tmp/warpedpd/core/src/main/assets/
           find /tmp/warpedpd/core/src/main/java -name "*.java" | wc -l
+
+      - name: Fix known compile issues
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, glob
+
+          root = '/tmp/warpedpd/core/src/main/java/xyz/gabriwar/warpedpixeldungeon'
+          os.chdir(root)
+
+          # 1) drop duplicated (truncated) Icons class in ItemSpriteSheet
+          p = 'sprites/ItemSpriteSheet.java'
+          lines = open(p, encoding='utf-8').read().split('\n')
+          idx = [i for i, l in enumerate(lines) if l.strip() == 'public static class Icons {']
+          print('Icons definitions at lines:', [i + 1 for i in idx])
+          if len(idx) >= 2:
+              start = idx[-1]
+              while start - 1 >= 0 and lines[start - 1].strip().startswith('//'):
+                  start -= 1
+              depth = 0
+              end = None
+              for i in range(start, len(lines)):
+                  depth += lines[i].count('{') - lines[i].count('}')
+                  if depth == 0 and i > start:
+                      end = i
+                      break
+              if end is None:
+                  raise SystemExit('cannot locate end of duplicated Icons class')
+              del lines[start:end + 1]
+              open(p, 'w', encoding='utf-8').write('\n'.join(lines))
+              print('removed duplicated Icons lines %d..%d' % (start + 1, end + 1))
+          print('remaining Icons:', sum(1 for l in lines if l.strip() == 'public static class Icons {'))
+
+          # 2) add missing SpiritBow import to bow classes
+          IMP = 'import xyz.gabriwar.warpedpixeldungeon.items.weapon.SpiritBow;'
+          for f in sorted(glob.glob('items/weapon/bow/*.java')):
+              s = open(f, encoding='utf-8').read()
+              if IMP in s:
+                  continue
+              ls = s.split('\n')
+              last = -1
+              for i, l in enumerate(ls[:80]):
+                  if l.startswith('import '):
+                      last = i
+              if last >= 0:
+                  ls.insert(last + 1, IMP)
+              open(f, 'w', encoding='utf-8').write('\n'.join(ls))
+              print('import added:', f)
+
+          # 3) drop import of non-existent HG_T1
+          p = 'items/Generator.java'
+          s = open(p, encoding='utf-8').read()
+          bad = 'import xyz.gabriwar.warpedpixeldungeon.items.weapon.melee.gun.HG.HG_T1;\n'
+          if bad in s:
+              open(p, 'w', encoding='utf-8').write(s.replace(bad, ''))
+              print('Generator: HG_T1 import removed')
+          print('FIX DONE')
+          PY
 
       - name: Setup Android SDK 36
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" 2>&1 | tail -3
-          ls "$ANDROID_HOME/platforms"
           echo "sdk.dir=$ANDROID_HOME" > /tmp/warpedpd/local.properties
 
       - name: Build APK (github release, unsigned)
@@ -90,14 +141,13 @@ jobs:
       - name: Locate APKs
         if: always()
         run: |
-          find /tmp/warpedpd/android/build/outputs -name "*.apk" -printf "%10s  %p\n" 2>/dev/null | sort -rn | head -10
+          find /tmp/warpedpd/android/build/outputs -name "*.apk" -printf "%10s  %p\n" 2>/dev/null | sort -rn | head
 
       - name: Upload APKs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: wpd-android-apk
-          path: |
-            /tmp/warpedpd/android/build/outputs/apk/**/*.apk
+          path: /tmp/warpedpd/android/build/outputs/apk/**/*.apk
           if-no-files-found: warn
           retention-days: 7
