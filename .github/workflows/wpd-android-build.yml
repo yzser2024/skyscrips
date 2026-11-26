@@ -1,0 +1,82 @@
+name: WPD Android Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_url:
+        description: 'Patch zip URL (override source core/src/main)'
+        required: true
+      upstream_commit:
+        description: 'Upstream warpedpd commit'
+        required: false
+        default: '0f255c2'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download patch zip
+        run: |
+          curl -L --fail --retry 5 --retry-delay 5 --max-time 600 -o /tmp/wpd-patch.zip "${{ inputs.patch_url }}"
+          ls -lh /tmp/wpd-patch.zip
+          python3 -c "import zipfile;print('entries',len(zipfile.ZipFile('/tmp/wpd-patch.zip').namelist()))"
+
+      - name: Clone upstream
+        run: |
+          git clone --quiet https://github.com/GabriWar/warpedpd.git /tmp/warpedpd
+          cd /tmp/warpedpd
+          git checkout -q "${{ inputs.upstream_commit }}" || echo "WARN: commit not found, stay on default"
+          echo "HEAD=$(git rev-parse --short HEAD)"
+          ls -a | head -30
+
+      - name: Apply patch
+        shell: bash
+        run: |
+          mkdir -p /tmp/patch && unzip -q /tmp/wpd-patch.zip -d /tmp/patch
+          SRC=$(find /tmp/patch -maxdepth 4 -type d -name warped-core-src | head -1)
+          echo "SRC=$SRC"
+          test -d "$SRC/core/src/main/java" || { echo "patch structure invalid"; exit 1; }
+          cp -a "$SRC/core/src/main/." /tmp/warpedpd/core/src/main/
+          echo "--- after copy ---"
+          ls /tmp/warpedpd/core/src/main/assets/
+          find /tmp/warpedpd/core/src/main/java -name "*.java" | wc -l
+
+      - name: Setup Android SDK 36
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" 2>&1 | tail -3
+          ls "$ANDROID_HOME/platforms"
+          echo "sdk.dir=$ANDROID_HOME" > /tmp/warpedpd/local.properties
+
+      - name: Build APK (github release, unsigned)
+        run: |
+          cd /tmp/warpedpd
+          chmod +x gradlew
+          ./gradlew :android:assembleGithubRelease --no-daemon --stacktrace
+        env:
+          GRADLE_OPTS: '-Xmx4g -Dfile.encoding=UTF-8'
+
+      - name: Locate APKs
+        if: always()
+        run: |
+          find /tmp/warpedpd/android/build/outputs -name "*.apk" -printf "%10s  %p\n" 2>/dev/null | sort -rn | head -10
+
+      - name: Upload APKs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpd-android-apk
+          path: |
+            /tmp/warpedpd/android/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
+          retention-days: 7
