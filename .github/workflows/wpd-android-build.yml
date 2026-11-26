@@ -3,9 +3,14 @@ name: WPD Android Build
 on:
   workflow_dispatch:
     inputs:
-      patch_url:
-        description: 'Patch zip URL (override source core/src/main)'
-        required: true
+      asset_tag:
+        description: 'Release tag holding the patch zip'
+        required: false
+        default: 'wpd-patch-src'
+      asset_name:
+        description: 'Asset filename inside that release'
+        required: false
+        default: 'WPD_rearranged_port_src.zip'
       upstream_commit:
         description: 'Upstream warpedpd commit'
         required: false
@@ -24,9 +29,25 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Download patch zip
+      - name: Download patch zip from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.asset_tag }}
+          NAME: ${{ inputs.asset_name }}
+          REPO: ${{ github.repository }}
         run: |
-          curl -L --fail --retry 5 --retry-delay 5 --max-time 600 -o /tmp/wpd-patch.zip "${{ inputs.patch_url }}"
+          set -euo pipefail
+          AID=$(curl -sS --retry 5 --retry-delay 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print([a['id'] for a in d['assets'] if a['name']=='$NAME'][0])")
+          echo "asset id=$AID"
+          curl -sSL --fail --retry 5 --retry-delay 3 --max-time 600 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/octet-stream" \
+            -o /tmp/wpd-patch.zip \
+            "https://api.github.com/repos/$REPO/releases/assets/$AID"
           ls -lh /tmp/wpd-patch.zip
           python3 -c "import zipfile;print('entries',len(zipfile.ZipFile('/tmp/wpd-patch.zip').namelist()))"
 
