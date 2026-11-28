@@ -1,4 +1,11 @@
-"""Apply the Wenyi 5xx probe fix by exact text replacement (no git apply needed).
+"""Apply the Wenyi local-relay fix by exact text replacement (no git apply needed).
+
+Two independent defects are fixed:
+  1. connectivity.py  - probes hammered a shared account pool concurrently and had
+                        no retry, so a transient 5xx became a false "unavailable".
+  2. _openai_compatible.py - the SDK client inherited the Windows system proxy,
+                        which forwarded 127.0.0.1 requests to a remote node and
+                        returned a 502 that looked like an upstream outage.
 
 Run from the cloned Wenyi repo root:
     python apply_fix.py
@@ -8,6 +15,7 @@ import sys
 
 CONNECTIVITY = Path("packages/core/wenyi_core/llm/connectivity.py")
 TESTS = Path("packages/core/tests/test_llm_connectivity.py")
+COMPAT = Path("packages/core/wenyi_core/llm/providers/_openai_compatible.py")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -262,4 +270,86 @@ t = replace_once(
 
 TESTS.write_text(t, encoding="utf-8")
 print("patched", TESTS)
+
+# --- providers/_openai_compatible.py: bypass the system proxy for loopback -----
+p = COMPAT.read_text(encoding="utf-8")
+
+p = replace_once(
+    p,
+    "import json\nfrom abc import abstractmethod",
+    "import ipaddress\nimport json\nfrom abc import abstractmethod",
+    "compat import ipaddress",
+)
+p = replace_once(
+    p,
+    "from typing import Any, Generic, TypeVar",
+    "from typing import Any, Generic, TypeVar\nfrom urllib.parse import urlsplit",
+    "compat import urlsplit",
+)
+
+p = replace_once(
+    p,
+    '''    def _ensure_client(self) -> Any:
+        with self._client_lock:
+            if self._client is None:
+                from openai import OpenAI
+
+                self.validate_credentials()
+                api_key = self.api_key()
+                self._client = OpenAI(
+                    api_key=api_key or "no-key",
+                    base_url=self.base_url,
+                    timeout=self.cfg.timeout,
+                    max_retries=0,
+                )
+        return self._client''',
+    '''    @staticmethod
+    def _is_loopback_endpoint(base_url: str | None) -> bool:
+        """True when the endpoint is a local relay on this machine."""
+        if not base_url:
+            return False
+        try:
+            host = urlsplit(base_url).hostname
+        except ValueError:
+            return False
+        if not host:
+            return False
+        if host.lower() in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    def _ensure_client(self) -> Any:
+        with self._client_lock:
+            if self._client is None:
+                import httpx
+                from openai import OpenAI
+
+                self.validate_credentials()
+                api_key = self.api_key()
+                client_args: dict[str, Any] = {
+                    "api_key": api_key or "no-key",
+                    "base_url": self.base_url,
+                    "timeout": self.cfg.timeout,
+                    "max_retries": 0,
+                }
+                # A local relay must never be routed through a system HTTP proxy.
+                # httpx honours the Windows system proxy but ignores its bypass
+                # list, so a proxy that is enabled for the internet would forward
+                # 127.0.0.1 requests to a remote node and fail with a 5xx that
+                # looks like an upstream outage. Loopback endpoints bypass it.
+                if self._is_loopback_endpoint(self.base_url):
+                    client_args["http_client"] = httpx.Client(
+                        timeout=self.cfg.timeout, trust_env=False
+                    )
+                self._client = OpenAI(**client_args)
+        return self._client''',
+    "compat _ensure_client",
+)
+
+COMPAT.write_text(p, encoding="utf-8")
+print("patched", COMPAT)
+
 print("ALL PATCHES APPLIED CLEANLY")
