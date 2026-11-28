@@ -52,13 +52,6 @@ PROBE_MAX_RETRIES = 3""",
 
 c = replace_once(
     c,
-    "DEFAULT_PROBE_TIMEOUT = 30.0",
-    "DEFAULT_PROBE_TIMEOUT = 60.0",
-    "probe timeout",
-)
-
-c = replace_once(
-    c,
     '''    """Send one minimal, non-retried request per profile; results keep the input order.
 
     Each probe bills a few tokens. Usage is not recorded in any run ledger, and failures are
