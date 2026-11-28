@@ -366,17 +366,26 @@ jobs:
         run: |
           set -euo pipefail
           cd apps/desktop
-          ASAR_BIN=$(node -e "console.log(require.resolve('@electron/asar/bin/asar.js'))")
-          echo "asar bin: $ASAR_BIN"
-          test -f "$ASAR_BIN" || { echo "::error::asar bin not resolved"; exit 1; }
+          ASAR_LIB=$(node -e "console.log(require.resolve('@electron/asar'))")
+          echo "asar lib: $ASAR_LIB"
+          test -f "$ASAR_LIB" || { echo "::error::@electron/asar lib not resolved"; exit 1; }
 
-          ARGS=()
-          while IFS= read -r f; do
-            [ -n "$f" ] && ARGS+=("--unpack" "dsh/$f")
-          done < pe-list.txt
-          echo "unpack entries: ${#ARGS[@]}"
-
-          node "$ASAR_BIN" pack .asar-root app.asar "${ARGS[@]}"
+          # The CLI exposes --unpack as a SINGLE-VALUE commander option
+          # (bin/asar.js: `options = { unpack: options.unpack }`), so repeating
+          # the flag keeps only the last expression and never yields a list.
+          # Call the library directly with an array instead.
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs"
+            import { createRequire } from "node:module"
+            const require = createRequire(process.cwd() + "/package.json")
+            const asar = require("@electron/asar")
+            const pe = readFileSync("pe-list.txt", "utf8")
+              .split(/\r?\n/).filter(Boolean).map(p => "dsh/" + p.split("\\").join("/"))
+            console.log("unpack patterns:", pe.length)
+            if (pe.length === 0) throw new Error("pe-list.txt is empty")
+            await asar.createPackageWithOptions(".asar-root", "app.asar", { unpack: pe })
+            console.log("packed app.asar")
+          '
           ls -la app.asar
           wc -c < app.asar
           test -d app.asar.unpacked || { echo "::error::app.asar.unpacked not produced"; exit 1; }
@@ -384,6 +393,12 @@ jobs:
           find app.asar.unpacked -type f | wc -l
           echo "=== unpacked top level ==="
           ls -1A app.asar.unpacked
+          echo "=== asar top entries ==="
+          node "$ASAR_LIB" list app.asar 2>/dev/null | awk -F/ 'NF==2' | head -20 || node -e '
+            const require2 = require("node:module").createRequire(process.cwd() + "/package.json")
+            const a = require2("@electron/asar")
+            for (const f of a.listPackage("app.asar").filter(x => x.split("/").filter(Boolean).length === 1)) console.log(f)
+          '
           echo "=== asar top entries ==="
           node "$ASAR_BIN" list app.asar | awk -F/ 'NF==2' | head -20
 
