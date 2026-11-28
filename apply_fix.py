@@ -43,9 +43,18 @@ c = replace_once(
 MAX_PROBE_WORKERS = 1
 # Number of immediate retries a probe performs for transient upstream failures (5xx,
 # connection resets, timeouts). Permanent errors (401/403/404) still fail fast.
-PROBE_MAX_RETRIES = 2
-PROBE_RETRY_WAIT_SECONDS = 0.5""",
+# A shared account pool that reports "cooling down" usually clears within a few
+# seconds, so three retries cover the common window without stalling the UI; the
+# probe timeout bounds the total wait.
+PROBE_MAX_RETRIES = 3""",
     "probe constants",
+)
+
+c = replace_once(
+    c,
+    "DEFAULT_PROBE_TIMEOUT = 30.0",
+    "DEFAULT_PROBE_TIMEOUT = 60.0",
+    "probe timeout",
 )
 
 c = replace_once(
@@ -114,9 +123,7 @@ c = replace_once(
             reachable_without_text = True
 
     # Some gateways serve a shared account pool that rejects bursts with transient
-    # 5xx responses. Retry those a few times with a short, bounded wait so a single
-    # cooling account does not produce a false "provider unavailable" verdict.
-    # Permanent errors (401/403/404/...) still fail fast via retry_reason().
+    # 5xx responses. Permanent errors (401/403/404/...) still fail fast.
     reporter = RetryReporter(
         provider=route.provider,
         profile=route.profile,
@@ -124,10 +131,25 @@ c = replace_once(
         max_attempts=PROBE_MAX_RETRIES + 1,
         emit=lambda event, **data: None,
     )
+
+    # provider_retry() waits via wait_for_provider_retry(), which prefers a server
+    # Retry-After header and otherwise falls back to exponential backoff with jitter.
+    # Pass that value through unchanged: a gateway reporting an account-pool
+    # cooldown must be allowed to state how long the cooldown is, and a cooldown is
+    # measured in seconds-to-minutes rather than in fixed 0.5s steps. The only
+    # clamp is the probe's own timeout budget, so the settings UI cannot hang.
+    probe_deadline = time.monotonic() + timeout
+
+    def bounded_sleep(seconds: float) -> None:
+        remaining = probe_deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(max(0.0, seconds), remaining))
+
     guarded = provider_retry(
         PROBE_MAX_RETRIES,
         reporter,
-        sleep=lambda seconds: time.sleep(min(seconds, PROBE_RETRY_WAIT_SECONDS)),
+        sleep=bounded_sleep,
     )(attempt_call)
 
     started = time.monotonic()
