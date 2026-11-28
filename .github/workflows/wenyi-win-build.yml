@@ -1,0 +1,133 @@
+name: Wenyi Windows installer (5xx fix)
+
+# Builds a Windows (NSIS) installer of Wenyi with the 5xx connectivity-probe
+# fix applied, entirely on GitHub Actions windows-latest. The fix is applied to
+# the cloned upstream source by apply_fix.py before the sidecar is built, so the
+# bundled wenyi-engine carries the patched connectivity.py.
+#
+# Manual trigger: Actions -> "Wenyi Windows installer (5xx fix)" -> Run workflow.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apply_fix.py"
+      - ".github/workflows/wenyi-win-build.yml"
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_REPO: https://github.com/BigDawnGhost/wenyi.git
+  SRC: wenyi-src
+
+jobs:
+  build-windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Clone upstream Wenyi
+        shell: bash
+        run: git clone --depth 1 "$UPSTREAM_REPO" "$SRC"
+
+      - name: Apply 5xx probe fix
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        run: |
+          set -euo pipefail
+          python "$GITHUB_WORKSPACE/apply_fix.py"
+          git diff --stat
+
+      - name: Set up uv (Python 3.12)
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: ${{ env.SRC }}/uv.lock
+
+      - name: Resolve frontend toolchain
+        id: toolchain
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        run: |
+          node --input-type=commonjs <<'JS' >> "$GITHUB_OUTPUT"
+          const p = require("./package.json");
+          console.log(`node=${p.engines?.node ?? "22"}`);
+          console.log(`pnpm=${p.packageManager ? p.packageManager.split("@")[1] : "9.15.9"}`);
+          JS
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ steps.toolchain.outputs.pnpm }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.toolchain.outputs.node }}
+          cache: pnpm
+          cache-dependency-path: ${{ env.SRC }}/pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync workspace (sidecar build toolchain)
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        run: uv sync --locked --package wenyi-desktop --group dev
+
+      - name: Build native lock library
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        run: cargo build --release -p wenyi-locks
+
+      - name: Verify patched source is in the build
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        run: |
+          set -euo pipefail
+          grep -n "PROBE_MAX_RETRIES = 2" packages/core/wenyi_core/llm/connectivity.py
+          grep -n "MAX_PROBE_WORKERS = 1" packages/core/wenyi_core/llm/connectivity.py
+          echo "Confirmed: 5xx fix present in source that will be bundled"
+
+      - name: Build Windows NSIS installer
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        env:
+          WENYI_UPDATE_REPO: ${{ github.repository }}
+        run: pnpm desktop:build --bundles nsis
+
+      - name: List bundle output
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        run: |
+          echo "=== target/release/bundle ==="
+          find target/release/bundle -maxdepth 3 -type f -printf '%p  %s bytes\n' || true
+
+      - name: Collect installer
+        shell: bash
+        working-directory: ${{ env.SRC }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find target/release/bundle/nsis -type f -iname '*.exe' -exec cp {} release-assets/ \;
+          ls -la release-assets
+          test -n "$(find release-assets -type f -iname '*.exe' -print -quit)" || { echo "::error::no NSIS exe produced"; exit 1; }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: wenyi-desktop-windows-5xx-fix
+          path: ${{ env.SRC }}/release-assets/*
+          if-no-files-found: error
+          retention-days: 30
