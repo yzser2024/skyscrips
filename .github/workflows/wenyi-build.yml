@@ -1,0 +1,102 @@
+name: Wenyi 5xx probe fix - build
+
+# Clones upstream Wenyi, applies wenyi-5xx-fix.patch, then tests and builds the
+# patched Python packages entirely on GitHub Actions. No local compilation.
+#
+# Fix: connectivity probes no longer fail on a transient 5xx burst from a cooling
+# upstream account pool ("provider temporarily unavailable / HTTP 502"). Probes run
+# sequentially and retry only transient failures via the shared llm/retrying.py
+# helper; permanent errors (401/403/404) still fail fast.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "wenyi-5xx-fix.patch"
+      - ".github/workflows/wenyi-build.yml"
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_REPO: https://github.com/BigDawnGhost/wenyi.git
+  SRC: wenyi-src
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Clone upstream Wenyi
+        run: git clone --depth 1 "$UPSTREAM_REPO" "$SRC"
+
+      - name: Apply 5xx probe fix patch
+        working-directory: ${{ env.SRC }}
+        run: |
+          set -euo pipefail
+          git apply --check "$GITHUB_WORKSPACE/wenyi-5xx-fix.patch"
+          git apply "$GITHUB_WORKSPACE/wenyi-5xx-fix.patch"
+          echo "=== patch applied; changed files ==="
+          git diff --stat
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        working-directory: ${{ env.SRC }}
+        run: uv sync --locked --all-packages --group dev
+
+      - name: Lint (Ruff)
+        working-directory: ${{ env.SRC }}
+        run: uv run --no-sync ruff check packages/core/wenyi_core/llm/connectivity.py packages/core/tests/test_llm_connectivity.py
+
+      - name: Format check (Ruff)
+        working-directory: ${{ env.SRC }}
+        run: uv run --no-sync ruff format --check packages/core/wenyi_core/llm/connectivity.py packages/core/tests/test_llm_connectivity.py
+
+      - name: Connectivity regression tests
+        working-directory: ${{ env.SRC }}
+        run: uv run --no-sync pytest -q -n auto packages/core/tests/test_llm_connectivity.py
+
+      - name: Build Python packages (wheel + sdist)
+        working-directory: ${{ env.SRC }}
+        run: |
+          uv build --package wenyi-core   --out-dir dist/core
+          uv build --package wenyi-cli    --out-dir dist/cli
+          uv build --package wenyi-backend --out-dir dist/backend
+          uv build --package wenyi-desktop --out-dir dist/desktop
+          ls -la dist/core dist/cli dist/backend dist/desktop
+
+      - name: Verify built artifacts
+        working-directory: ${{ env.SRC }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          files = [p for r in Path("dist").glob("*") for p in r.iterdir()]
+          wheels = [p for p in files if p.suffix == ".whl"]
+          sdists = [p for p in files if p.name.endswith(".tar.gz")]
+          assert wheels, "no wheel built"
+          assert sdists, "no sdist built"
+          print(f"wheels={len(wheels)} sdists={len(sdists)}")
+          for p in files:
+              print(f"  {p}")
+          PY
+
+      - name: Upload patched packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: wenyi-5xx-fix-packages
+          path: ${{ env.SRC }}/dist/**
+          if-no-files-found: error
+          retention-days: 30
