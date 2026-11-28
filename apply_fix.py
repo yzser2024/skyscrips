@@ -225,6 +225,26 @@ def test_transient_5xx_then_success_is_reachable(sdk):
     "tests 503 case",
 )
 
+# Probes are now sequential, so the concurrency-only "reversed" variants no
+# longer apply (they asserted a second probe started before the first finished).
+t = replace_once(
+    t,
+    '@pytest.mark.parametrize("sdk", [False, True], indirect=True, ids=["normal", "reversed"])\ndef test_probe_sends_one_minimal_request_per_profile(sdk):',
+    '# Probes are intentionally sequential (MAX_PROBE_WORKERS = 1), so the former\n'
+    '# "reversed" concurrency variant no longer applies: it asserted that a second\n'
+    '# probe started before the first finished.\n'
+    '@pytest.mark.parametrize("sdk", [False], indirect=True, ids=["normal"])\n'
+    'def test_probe_sends_one_minimal_request_per_profile(sdk):',
+    "tests concurrency variant 1",
+)
+t = replace_once(
+    t,
+    '@pytest.mark.parametrize("sdk", [False, True], indirect=True, ids=["normal", "reversed"])\ndef test_profile_probes_cover_unrouted_profiles_in_registry_order(sdk):',
+    '@pytest.mark.parametrize("sdk", [False], indirect=True, ids=["normal"])\n'
+    'def test_profile_probes_cover_unrouted_profiles_in_registry_order(sdk):',
+    "tests concurrency variant 2",
+)
+
 TESTS.write_text(t, encoding="utf-8")
 print("patched", TESTS)
 print("ALL PATCHES APPLIED CLEANLY")
