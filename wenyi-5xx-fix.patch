@@ -1,0 +1,181 @@
+--- a/packages/core/wenyi_core/llm/connectivity.py
++++ b/packages/core/wenyi_core/llm/connectivity.py
+@@ -14,14 +14,27 @@
+ from .errors import describe_provider_failure
+ from .operations import require_operation
+ from .registry import provider_spec
+-from .retrying import EmptyResponseError, TruncatedResponseError
++from .retrying import (
++    EmptyResponseError,
++    RetryReporter,
++    TruncatedResponseError,
++    provider_retry,
++)
+ from .routing import ResolvedRoute, model_route, resolve_model, resolve_routes
+ from .transport import RequestContext
+ 
+ DEFAULT_PROBE_TIMEOUT = 30.0
+ PROBE_OUTPUT_TOKENS = 16
+ PROBE_MESSAGES = ({"role": "user", "content": "Reply with the single word: OK"},)
+-MAX_PROBE_WORKERS = 8
++# Connectivity checks must not hammer a shared upstream account pool in parallel.
++# Some gateways reject concurrent requests with transient 5xx ("provider cooling down")
++# even though each request succeeds on its own. Sequential probes avoid that false
++# negative while still using the SDK's zero internal retries (no nested retries).
++MAX_PROBE_WORKERS = 1
++# Number of immediate retries a probe performs for transient upstream failures (5xx,
++# connection resets, timeouts). Permanent errors (401/403/404) still fail fast.
++PROBE_MAX_RETRIES = 2
++PROBE_RETRY_WAIT_SECONDS = 0.5
+ # Profiles outside every workflow route still need an operation to resolve output limits.
+ _DEFAULT_PROBE_OPERATION = "translation.body"
+ # A cut-off or blank answer still proves that endpoint, credential and model accepted the call.
+@@ -149,10 +162,13 @@
+     credentials: Mapping[str, str | None] | None,
+     timeout: float,
+ ) -> list[ProbeResult]:
+-    """Send one minimal, non-retried request per profile; results keep the input order.
+-
+-    Each probe bills a few tokens. Usage is not recorded in any run ledger, and failures are
+-    reduced to the provider-independent categories from ``describe_provider_failure``.
++    """Send one minimal probe per profile; results keep the input order.
++
++    Probes run sequentially and retry only transient upstream failures (bounded by
++    ``PROBE_MAX_RETRIES``) so a cooling account pool does not cause false negatives.
++    Each successful probe bills a few tokens. Usage is not recorded in any run ledger,
++    and failures are reduced to the provider-independent categories from
++    ``describe_provider_failure``.
+     """
+     if timeout <= 0:
+         raise ValueError("Probe timeout must be positive")
+@@ -220,21 +236,42 @@
+         record_usage=lambda sample: None,
+         attempt_scope=nullcontext,
+     )
++    reachable_without_text = False
++
++    def attempt_call() -> None:
++        nonlocal reachable_without_text
++        # An empty or truncated reply still proves connectivity; treat it as an
++        # immediate success so the retry helper never re-sends a reachable probe.
++        try:
++            adapter.generate(
++                [dict(message) for message in PROBE_MESSAGES],
++                request_model,
++                json_mode=False,
++                context=context,
++            )
++        except _REACHABLE_RESPONSES:
++            reachable_without_text = True
++
++    # Some gateways serve a shared account pool that rejects bursts with transient
++    # 5xx responses. Retry those a few times with a short, bounded wait so a single
++    # cooling account does not produce a false "provider unavailable" verdict.
++    # Permanent errors (401/403/404/...) still fail fast via retry_reason().
++    reporter = RetryReporter(
++        provider=route.provider,
++        profile=route.profile,
++        stage=route.operation,
++        max_attempts=PROBE_MAX_RETRIES + 1,
++        emit=lambda event, **data: None,
++    )
++    guarded = provider_retry(
++        PROBE_MAX_RETRIES,
++        reporter,
++        sleep=lambda seconds: time.sleep(min(seconds, PROBE_RETRY_WAIT_SECONDS)),
++    )(attempt_call)
++
+     started = time.monotonic()
+     try:
+-        adapter.generate(
+-            [dict(message) for message in PROBE_MESSAGES],
+-            request_model,
+-            json_mode=False,
+-            context=context,
+-        )
+-    except _REACHABLE_RESPONSES:
+-        return result(
+-            True,
+-            "reachable",
+-            "The provider accepted the request; the reply was empty or truncated.",
+-            latency_ms=_elapsed_ms(started),
+-        )
++        guarded()
+     except Exception as error:  # noqa: BLE001 - Every failure becomes a safe probe result.
+         failure = describe_provider_failure(error)
+         return result(
+@@ -244,6 +281,13 @@
+             status_code=failure.status_code,
+             latency_ms=_elapsed_ms(started),
+         )
++    if reachable_without_text:
++        return result(
++            True,
++            "reachable",
++            "The provider accepted the request; the reply was empty or truncated.",
++            latency_ms=_elapsed_ms(started),
++        )
+     return result(True, "ok", "The provider replied.", latency_ms=_elapsed_ms(started))
+ 
+ 
+--- a/packages/core/tests/test_llm_connectivity.py
++++ b/packages/core/tests/test_llm_connectivity.py
+@@ -14,6 +14,7 @@
+ from wenyi_cli.cli import app
+ from wenyi_core.llm.configuration import LLMConfig, ModelConfig, ProviderConfig
+ from wenyi_core.llm.connectivity import (
++    PROBE_MAX_RETRIES,
+     PROBE_OUTPUT_TOKENS,
+     probe_connections,
+     probe_draft_connection,
+@@ -97,6 +98,9 @@
+         behavior = behaviors.get(kwargs["model"], _response())
+         if isinstance(behavior, Exception):
+             raise behavior
++        # A callable behavior models a stateful/flaky endpoint across probe retries.
++        if callable(behavior):
++            return behavior(**kwargs)
+         return behavior
+ 
+     def ensure(self):
+@@ -132,7 +136,8 @@
+     assert all(result.latency_ms is not None for result in results)
+     assert sorted(call["model"] for call in sdk.calls) == ["big", "small"]
+     assert all(call["max_completion_tokens"] == PROBE_OUTPUT_TOKENS for call in sdk.calls)
+-    # Probes never retry and never wait the full workflow timeout.
++    # The SDK's internal retries stay off (no nested retry); transient failures are
++    # retried by the shared probe helper instead.
+     assert sdk.clients == [{"timeout": 5, "max_retries": 0}] * 2
+ 
+ 
+@@ -149,11 +154,28 @@
+     assert SECRET not in json.dumps(result.describe())
+ 
+ 
+-def test_transient_failures_are_not_retried(sdk):
++def test_transient_failures_are_retried_then_reported(sdk):
+     sdk.behaviors["big"] = _status_error(503)
+     [result] = probe_connections(_config(), ("translation.body",))
+     assert result.category == "provider_unavailable"
+-    assert len(sdk.calls) == 1
++    assert len(sdk.calls) == PROBE_MAX_RETRIES + 1
++
++
++def test_transient_5xx_then_success_is_reachable(sdk):
++    """A transient 5xx burst followed by a good reply must not fail the probe."""
++    state = {"n": 0}
++    good = _response()
++
++    def flaky(**kwargs):
++        state["n"] += 1
++        if state["n"] <= PROBE_MAX_RETRIES:
++            raise _status_error(503)
++        return good
++
++    sdk.behaviors["big"] = flaky
++    [result] = probe_connections(_config(), ("translation.body",))
++    assert result.ok and result.category == "ok"
++    assert state["n"] == PROBE_MAX_RETRIES + 1
+ 
+ 
+ def test_connection_errors_are_reported(sdk):
