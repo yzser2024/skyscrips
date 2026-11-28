@@ -96,12 +96,15 @@ jobs:
         working-directory: ${{ env.SRC }}
         run: |
           set -euo pipefail
-          F=packages/core/wenyi_core/llm/connectivity.py
-          grep -n "^MAX_PROBE_WORKERS = 1$" "$F"
-          grep -n "^PROBE_MAX_RETRIES = 3$" "$F"
-          grep -n "bounded_sleep" "$F"
-          grep -n "provider_retry(" "$F"
-          echo "Confirmed: sequential probes + retry patch present in the source that gets bundled"
+          C=packages/core/wenyi_core/llm/connectivity.py
+          P=packages/core/wenyi_core/llm/providers/_openai_compatible.py
+          grep -n "^MAX_PROBE_WORKERS = 1$" "$C"
+          grep -n "^PROBE_MAX_RETRIES = 3$" "$C"
+          grep -n "bounded_sleep" "$C"
+          grep -n "provider_retry(" "$C"
+          grep -n "_is_loopback_endpoint" "$P"
+          grep -n "trust_env=False" "$P"
+          echo "Confirmed: sequential probes + retry + loopback proxy bypass all present"
 
       - name: Build Windows NSIS installer
         shell: bash
