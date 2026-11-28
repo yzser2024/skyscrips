@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "wenyi-5xx-fix.patch"
+      - "apply_fix.py"
       - ".github/workflows/wenyi-build.yml"
 
 permissions:
@@ -39,13 +39,12 @@ jobs:
       - name: Clone upstream Wenyi
         run: git clone --depth 1 "$UPSTREAM_REPO" "$SRC"
 
-      - name: Apply 5xx probe fix patch
+      - name: Apply 5xx probe fix
         working-directory: ${{ env.SRC }}
         run: |
           set -euo pipefail
-          git apply --check "$GITHUB_WORKSPACE/wenyi-5xx-fix.patch"
-          git apply "$GITHUB_WORKSPACE/wenyi-5xx-fix.patch"
-          echo "=== patch applied; changed files ==="
+          python "$GITHUB_WORKSPACE/apply_fix.py"
+          echo "=== fix applied; changed files ==="
           git diff --stat
 
       - name: Install uv
