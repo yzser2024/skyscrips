@@ -258,9 +258,13 @@ jobs:
             echo "::error::dsh/runtime must not be inside the asar"; exit 1
           fi
           SZ=$(du -sm "$ROOT" | cut -f1)
-          echo ".asar-root = ${SZ}MB"
-          if [ "$SZ" -gt 900 ]; then
-            echo "::error::.asar-root is ${SZ}MB, expected <900MB (runtime/ must not be inside)"
+          echo ".asar-root = ${SZ}MB (uncompressed staging; asar output will be ~200MB)"
+          # dsh/ alone is ~940MB uncompressed on this payload, so the staging tree
+          # legitimately lands near 1GB. Only a runaway copy (e.g. runtime/ pulled
+          # in twice) would exceed this.
+          if [ "$SZ" -gt 1400 ]; then
+            echo "::error::.asar-root is ${SZ}MB, expected <1400MB"
+            du -sh "$ROOT"/* 2>/dev/null | sort -h | tail -10
             exit 1
           fi
 
