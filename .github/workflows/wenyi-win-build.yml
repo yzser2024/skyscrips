@@ -96,9 +96,12 @@ jobs:
         working-directory: ${{ env.SRC }}
         run: |
           set -euo pipefail
-          grep -n "PROBE_MAX_RETRIES = 2" packages/core/wenyi_core/llm/connectivity.py
-          grep -n "MAX_PROBE_WORKERS = 1" packages/core/wenyi_core/llm/connectivity.py
-          echo "Confirmed: 5xx fix present in source that will be bundled"
+          F=packages/core/wenyi_core/llm/connectivity.py
+          grep -n "^MAX_PROBE_WORKERS = 1$" "$F"
+          grep -n "^PROBE_MAX_RETRIES = 3$" "$F"
+          grep -n "bounded_sleep" "$F"
+          grep -n "provider_retry(" "$F"
+          echo "Confirmed: sequential probes + retry patch present in the source that gets bundled"
 
       - name: Build Windows NSIS installer
         shell: bash
